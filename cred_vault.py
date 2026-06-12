@@ -36,26 +36,46 @@ def _load_key() -> bytes:
     return key
 
 
-_fernet = Fernet(_load_key())
+import threading
+
+_fernet: Fernet | None = None
+_fernet_lock = threading.Lock()
+
+
+def _get_fernet() -> Fernet:
+    global _fernet
+    if _fernet is None:
+        with _fernet_lock:
+            if _fernet is None:  # double-checked locking
+                try:
+                    _fernet = Fernet(_load_key())
+                except Exception as e:
+                    raise RuntimeError(f"Failed to load vault key: {e}. "
+                                       "Set KALI_MCP_VAULT_KEY env var or ensure vault.key is readable.") from e
+    return _fernet
 
 
 def _encrypt(value: str) -> str:
     """Encrypt a secret. Empty values pass through unchanged."""
     if not value:
         return value
-    return _fernet.encrypt(value.encode()).decode()
+    return _get_fernet().encrypt(value.encode()).decode()
 
 
 def _decrypt(value: str) -> str:
     """
-    Decrypt a stored secret. Falls back to returning the value as-is if it is
-    not valid ciphertext (e.g. legacy plaintext rows written before encryption).
+    Decrypt a stored secret. Returns the value as-is if not valid ciphertext,
+    but logs a warning so callers know decryption failed.
     """
     if not value:
         return value
     try:
-        return _fernet.decrypt(value.encode()).decode()
+        return _get_fernet().decrypt(value.encode()).decode()
     except (InvalidToken, ValueError):
+        import logging
+        logging.getLogger(__name__).warning(
+            "cred_vault: failed to decrypt value — returning raw (may be legacy plaintext)"
+        )
         return value
 
 
@@ -99,6 +119,15 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     d["password"] = _decrypt(d.get("password", ""))
     d["hash"] = _decrypt(d.get("hash", ""))
     return d
+
+
+def get_all_credentials(limit: int = 10) -> list[dict]:
+    """Public accessor — returns recent credentials with decrypted passwords/hashes."""
+    with _conn() as db:
+        rows = db.execute(
+            "SELECT * FROM creds ORDER BY discovered_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+    return [_row_to_dict(r) for r in rows]
 
 
 def _register(mcp, job_mgr):

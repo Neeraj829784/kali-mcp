@@ -109,12 +109,10 @@ def _register(mcp, job_mgr):
                     "action": _suggest_action(f),
                 })
 
-        # Check credential vault
+        # Check credential vault — use public API so passwords are decrypted
         try:
-            from cred_vault import _conn
-            with _conn() as db:
-                creds = db.execute("SELECT * FROM creds ORDER BY discovered_at DESC LIMIT 10").fetchall()
-                stored_creds = [dict(c) for c in creds]
+            from cred_vault import get_all_credentials
+            stored_creds = get_all_credentials(limit=10)
         except Exception:
             stored_creds = []
 

@@ -18,6 +18,7 @@ def _conn():
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA journal_mode=WAL")
     db.execute("PRAGMA busy_timeout=30000")
+    db.execute("PRAGMA foreign_keys=ON")
     db.executescript("""
         CREATE TABLE IF NOT EXISTS engagements (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,10 +92,14 @@ def _register(mcp, job_mgr):
 
         now = datetime.now(timezone.utc).isoformat()
         with _conn() as db:
-            # Upsert — allow restarting same engagement
+            # INSERT OR IGNORE preserves existing id (and its findings); UPDATE refreshes fields
             db.execute(
-                "INSERT OR REPLACE INTO engagements (name,client,status,scope,notes,created_at) VALUES (?,?,?,?,?,?)",
+                "INSERT OR IGNORE INTO engagements (name,client,status,scope,notes,created_at) VALUES (?,?,?,?,?,?)",
                 (name, client, "active", json.dumps(scope), notes, now)
+            )
+            db.execute(
+                "UPDATE engagements SET client=?,status='active',scope=?,notes=?,ended_at=NULL WHERE name=?",
+                (client, json.dumps(scope), notes, name)
             )
             eng_id = db.execute("SELECT id FROM engagements WHERE name=?", (name,)).fetchone()[0]
 

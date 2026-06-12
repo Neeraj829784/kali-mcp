@@ -167,10 +167,7 @@ def _register(mcp, job_mgr):
         }
 
         if depth in ("normal", "deep"):
-            from tools.web.web_crawler import _register
             # Run crawler separately (pure Python, not subprocess)
-            import httpx, re
-            from urllib.parse import urljoin, urlparse
             crawl_task = asyncio.create_task(_crawl_simple(url, max_pages=30))
             tasks["crawl"] = crawl_task
 

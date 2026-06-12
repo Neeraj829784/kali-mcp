@@ -105,9 +105,10 @@ def _from_sqlmap(output: str, host: str) -> list[dict]:
             tool="sqlmap",
         ))
     if re.search(r"available databases.*?:\s*\[(.+?)\]", output, re.DOTALL):
+        db_match = re.search(r"\[\*\] databases.*", output, re.DOTALL)
         findings.append(_finding(
             host=host, title="Database names enumerated via SQLi",
-            severity=HIGH, evidence=re.search(r"\[\*\] databases.*", output, re.DOTALL).group(0)[:200] if re.search(r"\[\*\] databases", output) else "",
+            severity=HIGH, evidence=db_match.group(0)[:200] if db_match else "",
             tool="sqlmap",
         ))
     return findings

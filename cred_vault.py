@@ -40,9 +40,16 @@ import threading
 
 _fernet: Fernet | None = None
 _fernet_lock = threading.Lock()
+"""Guards lazy initialisation of _fernet so only one thread calls _load_key()."""
 
 
 def _get_fernet() -> Fernet:
+    """Return the module-level Fernet instance, initialising it on first call.
+
+    Uses double-checked locking so concurrent callers don't race to create
+    multiple Fernet instances or call _load_key() more than once.
+    Raises RuntimeError with a clear message if the key cannot be loaded.
+    """
     global _fernet
     if _fernet is None:
         with _fernet_lock:
@@ -122,7 +129,10 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
 
 
 def get_all_credentials(limit: int = 10) -> list[dict]:
-    """Public accessor — returns recent credentials with decrypted passwords/hashes."""
+    """Return the most recent credentials from the vault with passwords decrypted.
+
+    limit: maximum number of rows to return (default 10), ordered newest-first.
+    """
     with _conn() as db:
         rows = db.execute(
             "SELECT * FROM creds ORDER BY discovered_at DESC LIMIT ?", (limit,)

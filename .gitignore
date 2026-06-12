@@ -1,0 +1,34 @@
+# Virtual environment
+venv/
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Engagement data — NEVER commit (contains real targets, creds, scan output)
+artifacts/
+*.db
+audit.log
+scope.txt
+gowitness.jsonl
+
+# Credential vault and engagement databases (plaintext secrets)
+vault.db
+jobs.db
+engagements.db
+
+# Credential vault encryption key — NEVER commit
+vault.key
+
+# Local MCP/client config that may hold tokens
+claude_desktop_config.json
+
+# OS noise
+.DS_Store
+*.swp
+
+# Local backup of pre-clean git history — never commit
+.git.backup-*/

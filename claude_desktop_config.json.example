@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "kali-mcp": {
+      "command": "/path/to/kali-mcp/venv/bin/python",
+      "args": ["/path/to/kali-mcp/server.py"],
+      "env": {}
+    }
+  }
+}

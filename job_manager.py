@@ -111,9 +111,10 @@ class JobManager:
                 from findings import extract_findings
                 from suggest import suggest_next
                 import engagement as eng_mod
-                # Best-effort target extraction from cmd
+                # Best-effort target extraction from cmd — skip flag values and file paths
                 target = next((a for a in reversed(cmd)
-                               if a and not a.startswith("-") and a != cmd[0]), "")
+                               if a and not a.startswith("-") and a != cmd[0]
+                               and not os.path.exists(a) and "/" not in a), "")
                 findings = extract_findings(tool, output, target)
                 if findings:
                     result["findings"] = findings

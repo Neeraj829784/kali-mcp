@@ -8,12 +8,24 @@ import re
 
 SCOPE_FILE = os.path.join(os.path.dirname(__file__), "scope.txt")
 
+_cache: list[str] | None = None
+
 
 def _load_scope() -> list[str]:
+    global _cache
+    if _cache is not None:
+        return _cache
     if not os.path.exists(SCOPE_FILE):
-        return []
+        _cache = []
+        return _cache
     with open(SCOPE_FILE) as f:
-        return [l.strip() for l in f if l.strip() and not l.startswith("#")]
+        _cache = [l.strip() for l in f if l.strip() and not l.startswith("#")]
+    return _cache
+
+
+def _invalidate():
+    global _cache
+    _cache = None
 
 
 def _is_ip(target: str) -> bool:
@@ -67,6 +79,7 @@ def check_scope(target: str) -> None:
 def add_scope(entry: str) -> None:
     with open(SCOPE_FILE, "a") as f:
         f.write(entry.strip() + "\n")
+    _invalidate()
 
 
 def set_scope(entries: list[str]) -> None:
@@ -74,6 +87,7 @@ def set_scope(entries: list[str]) -> None:
     with open(SCOPE_FILE, "w") as f:
         for e in entries:
             f.write(e.strip() + "\n")
+    _invalidate()
 
 
 def remove_scope(entry: str) -> bool:
@@ -84,6 +98,7 @@ def remove_scope(entry: str) -> bool:
     with open(SCOPE_FILE, "w") as f:
         for e in new:
             f.write(e + "\n")
+    _invalidate()
     return True
 
 
@@ -91,6 +106,7 @@ def clear_scope() -> None:
     """Remove scope file — reverts to lab mode (all targets allowed)."""
     if os.path.exists(SCOPE_FILE):
         os.unlink(SCOPE_FILE)
+    _invalidate()
 
 
 def list_scope() -> list[str]:

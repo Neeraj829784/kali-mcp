@@ -2,7 +2,6 @@ name: tests
 
 on:
   push:
-    branches: [main]
   pull_request:
     branches: [main]
 
@@ -11,10 +10,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+
+      - name: Install Kali tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            nmap nikto gobuster ffuf hydra sqlmap \
+            seclists wordlists exploitdb wpscan \
+            enum4linux smbclient
 
       - name: Install dependencies
         run: pip install -e ".[dev]"

@@ -139,6 +139,8 @@ def _register(mcp, job_mgr):
             "recommended_next": _build_recommendations(all_findings, stored_creds, host_services),
         }
 
+    _register_chains(mcp, job_mgr)
+
 
 def _suggest_action(finding: dict) -> str:
     title = finding.get("title", "").lower()
@@ -175,3 +177,58 @@ def _build_recommendations(findings: list, creds: list, host_services: dict) -> 
             recs.append(f"SMB on {host} — run enum4linux_scan and check for EternalBlue")
 
     return recs[:5]
+
+
+def _register_chains(mcp, job_mgr):
+    """Register the analyze_attack_chains tool. Called from triage._register."""
+
+    @mcp.tool()
+    async def analyze_attack_chains(
+        host: str = "",
+        min_severity: str = "low",
+        min_confidence: str = "low",
+    ) -> dict:
+        """Correlate current findings into multi-stage attack chains.
+
+        Shows how individual low/medium findings combine into high-impact compound
+        attack paths (e.g. SQL injection + exposed SSH = credential theft + system access).
+        Call this at any point during an engagement to understand compound risk.
+
+        host: focus on a specific host (empty = all hosts)
+        min_severity: minimum finding severity to consider — info, low, medium, high, critical
+        min_confidence: minimum finding confidence to consider — low, medium, high
+        Returns: list of chains with name, escalated severity, narrative, steps, affected hosts.
+        """
+        from findings import extract_findings, dedup_findings
+        from chains import build_attack_chains
+
+        jobs = await job_mgr.list_jobs(200)
+        all_findings = []
+        for j in jobs:
+            if j.get("status") != "completed":
+                continue
+            full = await job_mgr.get_job(j["id"])
+            all_findings.extend(
+                extract_findings(j["tool"], full.get("output", ""), host or "unknown")
+            )
+
+        all_findings = dedup_findings(all_findings)
+
+        sev_rank = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+        conf_rank = {"low": 0, "medium": 1, "high": 2}
+        min_sev = min_severity.lower() if min_severity else "low"
+        min_conf = min_confidence.lower() if min_confidence else "low"
+        filtered = [
+            f for f in all_findings
+            if sev_rank.get(f.get("severity", "info"), 0) >= sev_rank.get(min_sev, 0)
+            and conf_rank.get(f.get("confidence", "low"), 0) >= conf_rank.get(min_conf, 0)
+        ]
+        if host:
+            filtered = [f for f in filtered if f.get("host") == host]
+
+        chains = build_attack_chains(filtered)
+        return {
+            "total_findings_analyzed": len(filtered),
+            "chains_found": len(chains),
+            "chains": chains,
+        }

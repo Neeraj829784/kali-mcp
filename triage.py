@@ -13,6 +13,7 @@ def _register(mcp, job_mgr):
     async def analyze_findings(
         host: str = "",
         min_severity: str = "low",
+        min_confidence: str = "low",
         max_items: int = 20,
     ) -> dict:
         """
@@ -22,6 +23,7 @@ def _register(mcp, job_mgr):
 
         host: focus on specific host (empty = all hosts)
         min_severity: minimum severity to include — low, medium, high, critical
+        min_confidence: minimum confidence to include — low, medium, high
         max_items: max findings to analyze (default 20)
 
         Returns: prioritized attack paths, quick wins, and recommended next actions.
@@ -55,10 +57,12 @@ def _register(mcp, job_mgr):
 
         # Filter
         sev_rank = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+        conf_rank = {"low": 0, "medium": 1, "high": 2}
         min_rank = sev_rank.get(min_severity.lower(), 1)
         if host:
             all_findings = [f for f in all_findings if f.get("host") == host]
-        filtered = [f for f in all_findings if sev_rank.get(f.get("severity","info"), 0) >= min_rank]
+        filtered = [f for f in all_findings if sev_rank.get(f.get("severity","info"), 0) >= min_rank
+                    and conf_rank.get(f.get("confidence", "low"), 0) >= conf_rank.get(min_confidence, 0)]
         filtered = filtered[:max_items]
 
         # Group by severity

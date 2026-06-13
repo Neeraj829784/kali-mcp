@@ -22,4 +22,4 @@ jobs:
 
       - name: Run tests
         run: |
-          pytest tests/test_core.py tests/test_tools_web.py tests/test_findings.py tests/test_chains.py tests/test_report.py tests/test_report_polish.py tests/test_html_and_chains_tool.py -q
+          pytest tests/test_core.py tests/test_tools_web.py tests/test_findings.py tests/test_chains.py tests/test_report.py tests/test_report_polish.py tests/test_html_and_chains_tool.py tests/test_finding_status.py -q

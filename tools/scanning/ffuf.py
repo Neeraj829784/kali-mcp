@@ -33,7 +33,7 @@ def _register(mcp, job_mgr):
         check_scope(url)
         wl = wordlist if wordlist else find_wordlist("dirb_common")
         cmd = ["ffuf", "-w", f"{wl}:{keyword}", "-u", url,
-               "-t", str(threads)]
+               "-t", str(threads), "-json"]
         if match_codes and not filter_codes:
             cmd += ["-mc", match_codes]
         if filter_codes:

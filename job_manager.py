@@ -117,6 +117,14 @@ class JobManager:
                                and not os.path.exists(a) and "/" not in a), "")
                 findings = extract_findings(tool, output, target)
                 if findings:
+                    # Run soft-404 / wildcard verification on web path findings
+                    if tool in ("gobuster_dir", "gobuster_vhost", "ffuf"):
+                        from findings import verify_web_findings
+                        base_url = next(
+                            (a for a in cmd if a.startswith("http")), ""
+                        )
+                        if base_url:
+                            findings = await verify_web_findings(findings, base_url)
                     result["findings"] = findings
                     result["findings_count"] = len(findings)
                     # Auto-tag to active engagement (sync sqlite → run off the loop)

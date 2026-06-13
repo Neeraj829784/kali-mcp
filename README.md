@@ -39,8 +39,14 @@ Transforms 28+ Kali security tools into structured, AI-consumable MCP tool calls
 - **Scope Enforcement** — Allowlist-based target authorization prevents accidental unauthorized scanning
 - **Async Job Queue** — Long-running scans run in background with process group management, cancellation support, and partial output reads
 - **Engagement Model** — Named engagements group scope, jobs, findings, and credentials for professional pentest organization
-- **Credential Vault** — SQLite storage for discovered credentials with retrieval and tagging
-- **Automated Finding Extraction** — Parses raw tool output into structured findings categorized by severity (critical/high/medium/low/info)
+- **Credential Vault** — Fernet-encrypted SQLite storage for discovered credentials, thread-safe with env-var key support
+- **Confidence-Scored Findings** — Every finding carries a `confidence` level (high/medium/low) separate from severity. Tool-confirmed findings (sqlmap injectable, hydra valid creds, nmap open port) = high; template matches = medium; pattern guesses (nikto, gobuster) = low
+- **Finding Deduplication + Cross-Tool Corroboration** — Identical findings from multiple tools are merged into one; when 2+ distinct tools agree, confidence is boosted automatically
+- **Soft-404 / Wildcard Detection** — Gobuster/ffuf path findings are actively re-verified; wildcard server responses are dropped as false positives; confirmed distinct paths are promoted to high confidence
+- **Nikto Noise Filtering** — Low-value header/info lines are filtered out; only actionable findings (XSS, SQLi, RCE, injection) are kept
+- **Attack Chain Engine** — Correlates small individual findings into compound-impact narratives (e.g. "SQL Injection → Credential Theft → System Access"). Automatically escalates combined severity beyond individual finding severity
+- **Professional Report Generator** — `generate_pentest_report` produces a client-ready Markdown report from vuln findings (not raw scan output): executive summary, attack chains section, findings grouped by severity with evidence + remediation guidance + confidence, scan coverage appendix. Supports `min_severity`, `min_confidence`, and `save_to` file output
+- **Remediation Guidance** — Automatic remediation lookup for 12 vulnerability classes (SQLi, XSS, SMB vulns, file upload, path traversal, credential issues, TLS, CORS, and more)
 - **Auto-Suggest Next Steps** — Chain-of-thought recommendations based on tool findings (e.g., "SSH port found → suggest hydra brute force")
 - **Parallel Workflows** — `scan_host` and `scan_web` fire multiple tools simultaneously, reducing total recon time by 70%+
 - **CVE-to-Exploit Chain** — Given a service version, finds matching exploits in searchsploit and Metasploit automatically
@@ -588,9 +594,11 @@ for module in [..., new_tool, ...]:
 
 ## License
 
-This project is for **authorized security testing only**. Always ensure you have proper authorization before scanning any target.
+MIT License — see [LICENSE](LICENSE) for full terms.
 
-The scope enforcement system is designed to prevent accidental unauthorized scanning, but the ultimate responsibility lies with the operator.
+**Authorized use only.** This tool is designed exclusively for systems you own or have explicit written authorization to test. Unauthorized use is illegal under the CFAA, Computer Misuse Act, and equivalent laws. You accept full responsibility for all use.
+
+The scope enforcement system is a safety aid, not a substitute for proper written authorization.
 
 ---
 

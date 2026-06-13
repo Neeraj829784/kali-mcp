@@ -49,6 +49,10 @@ def _register(mcp, job_mgr):
                 if f.get("service") and f["service"] not in host_services.get(h, []):
                     host_services.setdefault(h, []).append(f["service"])
 
+        # Deduplicate across tools before analysis (merges + corroboration boost)
+        from findings import dedup_findings
+        all_findings = dedup_findings(all_findings)
+
         # Filter
         sev_rank = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
         min_rank = sev_rank.get(min_severity.lower(), 1)

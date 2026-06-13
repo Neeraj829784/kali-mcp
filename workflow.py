@@ -106,9 +106,9 @@ def _register(mcp, job_mgr):
                     }
 
         # Aggregate all findings
-        from findings import extract_findings
+        from findings import extract_findings, dedup_findings
         from suggest import suggest_next
-        all_findings = extract_findings("nmap_port_scan", nmap_output, target)
+        all_findings = dedup_findings(extract_findings("nmap_port_scan", nmap_output, target))
         suggestions = suggest_next("nmap_port_scan", nmap_output, target)
 
         return {

@@ -11,6 +11,7 @@ async def _generate_pentest_report_impl(
     min_severity: str = "low",
     min_confidence: str = "low",
     host: str = "",
+    save_to: str = "",
 ) -> dict:
     from findings import extract_findings, dedup_findings
     from chains import build_attack_chains
@@ -29,6 +30,35 @@ async def _generate_pentest_report_impl(
         all_findings.extend(
             extract_findings(j["tool"], full.get("output", ""), host or "unknown")
         )
+
+    all_findings = dedup_findings(all_findings)
+
+    # Also include findings tagged to the active engagement (may overlap — dedup handles it)
+    try:
+        import engagement as eng_mod2
+        active = eng_mod2.get_active()
+        if active:
+            import sqlite3
+            db_path = eng_mod2.ENGAGEMENT_DB
+            with sqlite3.connect(db_path) as db:
+                db.row_factory = sqlite3.Row
+                rows = db.execute(
+                    "SELECT * FROM eng_findings WHERE engagement_id=? ORDER BY added_at DESC LIMIT 500",
+                    (active["id"],)
+                ).fetchall()
+            for row in rows:
+                all_findings.append({
+                    "host": row["host"] or "",
+                    "port": row["port"] or 0,
+                    "service": row["service"] or "",
+                    "title": row["title"] or "",
+                    "severity": row["severity"] or "info",
+                    "evidence": row["evidence"] or "",
+                    "tool": row["tool"] or "",
+                    "confidence": "medium",
+                })
+    except Exception:
+        pass
 
     all_findings = dedup_findings(all_findings)
 
@@ -130,7 +160,25 @@ async def _generate_pentest_report_impl(
     lines.append(f"- **Total completed jobs:** {job_count}")
     lines.append(f"- **Report generated:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
 
-    return {"report": "\n".join(lines), "format": "markdown"}
+    report_md = "\n".join(lines)
+    result: dict = {"report": report_md, "format": "markdown", "findings_count": len(filtered), "chains_count": len(chains)}
+
+    if save_to:
+        from tools.web.web_tools import _safe_save_path
+        try:
+            path = _safe_save_path(save_to)
+            dirpath = os.path.dirname(path)
+            if dirpath:
+                os.makedirs(dirpath, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(report_md)
+            result["saved_to"] = path
+        except ValueError as e:
+            result["save_error"] = str(e)
+        except Exception as e:
+            result["save_error"] = f"Failed to save: {e}"
+
+    return result
 
 
 def _register(mcp, job_mgr):
@@ -223,6 +271,10 @@ def _register(mcp, job_mgr):
         min_severity: str = "low",
         min_confidence: str = "low",
         host: str = "",
+        save_to: str = "",
     ) -> dict:
-        """Generate a professional finding-based pentest report with attack chains and remediation."""
-        return await _generate_pentest_report_impl(job_mgr, title, min_severity, min_confidence, host)
+        """Generate a professional finding-based pentest report with attack chains and remediation.
+
+        save_to: optional file path to save the report (must be under artifacts/, /tmp, or /var/tmp)
+        """
+        return await _generate_pentest_report_impl(job_mgr, title, min_severity, min_confidence, host, save_to)

@@ -322,16 +322,18 @@ async def verify_web_findings(findings: list[dict], base_url: str,
 def _register(mcp, job_mgr):
 
     @mcp.tool()
-    async def get_findings(job_id: str = "", host: str = "", min_severity: str = "info") -> dict:
+    async def get_findings(job_id: str = "", host: str = "", min_severity: str = "info", min_confidence: str = "low") -> dict:
         """
         Extract and return normalized findings from a completed job.
         job_id: job to extract findings from (leave empty to get all recent findings)
         host: filter findings by host
         min_severity: minimum severity to return — info, low, medium, high, critical
+        min_confidence: minimum confidence to return — low, medium, high
         Returns: list of normalized Finding objects with host, title, severity, evidence, tool
         """
         severity_rank = {INFO: 0, LOW: 1, MEDIUM: 2, HIGH: 3, CRITICAL: 4}
         min_rank = severity_rank.get(min_severity.lower(), 0)
+        conf_rank = {"low": 0, "medium": 1, "high": 2}
 
         if job_id:
             job = await job_mgr.get_job(job_id)
@@ -354,9 +356,10 @@ def _register(mcp, job_mgr):
         # Deduplicate across tools (merges + corroboration confidence boost)
         all_findings = dedup_findings(all_findings)
 
-        # Filter by severity and host
+        # Filter by severity, confidence, and host
         filtered = [f for f in all_findings
-                    if severity_rank.get(f["severity"], 0) >= min_rank]
+                    if severity_rank.get(f["severity"], 0) >= min_rank
+                    and conf_rank.get(f.get("confidence", "low"), 0) >= conf_rank.get(min_confidence, 0)]
         if host:
             filtered = [f for f in filtered if f["host"] == host]
 

@@ -42,9 +42,15 @@ def _conn():
             tool TEXT,
             job_id TEXT,
             added_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'unconfirmed',
             FOREIGN KEY(engagement_id) REFERENCES engagements(id)
         );
     """)
+    # Migrate: add status column for existing DBs
+    try:
+        db.execute("ALTER TABLE eng_findings ADD COLUMN status TEXT NOT NULL DEFAULT 'unconfirmed'")
+    except Exception:
+        pass  # column already exists
     db.commit()
     return db
 
@@ -60,12 +66,12 @@ def tag_finding(finding: dict, job_id: str = "") -> None:
     now = datetime.now(timezone.utc).isoformat()
     with _conn() as db:
         db.execute(
-            "INSERT INTO eng_findings (engagement_id,host,port,service,title,severity,evidence,tool,job_id,added_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO eng_findings (engagement_id,host,port,service,title,severity,evidence,tool,job_id,added_at,status) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (_active["id"], finding.get("host",""), finding.get("port"),
              finding.get("service",""), finding.get("title",""),
              finding.get("severity","info"), finding.get("evidence","")[:500],
-             finding.get("tool",""), job_id, now)
+             finding.get("tool",""), job_id, now, "unconfirmed")
         )
 
 
@@ -193,3 +199,58 @@ def _register(mcp, job_mgr):
                 "GROUP BY e.id ORDER BY e.created_at DESC"
             ).fetchall()
         return [dict(r) for r in rows]
+
+    @mcp.tool()
+    async def list_unconfirmed_findings(host: str = "", min_severity: str = "low") -> dict:
+        """List findings pending validation for the current engagement.
+
+        Returns unconfirmed findings ordered by severity so a validation agent
+        can work through them one by one and call update_finding_status on each.
+        host: filter by specific host (empty = all)
+        min_severity: info, low, medium, high, critical
+        """
+        if not _active:
+            return {"error": "No active engagement. Run engagement_start() first."}
+        sev_rank = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+        min_rank = sev_rank.get(min_severity.lower(), 0)
+        query = ("SELECT * FROM eng_findings WHERE engagement_id=? AND status='unconfirmed'")
+        params: list = [_active["id"]]
+        if host:
+            query += " AND host=?"
+            params.append(host)
+        query += (" ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 "
+                  "WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, added_at DESC")
+        with _conn() as db:
+            rows = db.execute(query, params).fetchall()
+        findings = [dict(r) for r in rows
+                    if sev_rank.get(dict(r).get("severity", "info"), 0) >= min_rank]
+        return {
+            "engagement": _active["name"],
+            "unconfirmed_count": len(findings),
+            "findings": findings,
+            "hint": "Call update_finding_status(finding_id, 'confirmed'|'false_positive') for each.",
+        }
+
+    @mcp.tool()
+    async def update_finding_status(finding_id: int, status: str) -> dict:
+        """Update the validation status of a finding.
+
+        Called by a validation agent after manually verifying a finding.
+        finding_id: the finding's id (from list_unconfirmed_findings)
+        status: 'confirmed' — finding is real and exploitable
+                'false_positive' — finding is not real, exclude from report
+                'unconfirmed' — reset back to pending (if re-verification needed)
+        """
+        valid = {"confirmed", "false_positive", "unconfirmed"}
+        if status not in valid:
+            return {"error": f"Invalid status '{status}'. Must be one of: {valid}"}
+        if not _active:
+            return {"error": "No active engagement. Run engagement_start() first."}
+        with _conn() as db:
+            cur = db.execute(
+                "UPDATE eng_findings SET status=? WHERE id=? AND engagement_id=?",
+                (status, finding_id, _active["id"])
+            )
+        if cur.rowcount == 0:
+            return {"error": f"Finding {finding_id} not found in active engagement.", "updated": False}
+        return {"finding_id": finding_id, "status": status, "updated": True}

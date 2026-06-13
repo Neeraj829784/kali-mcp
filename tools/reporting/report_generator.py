@@ -13,6 +13,7 @@ async def _generate_pentest_report_impl(
     host: str = "",
     save_to: str = "",
     format: str = "markdown",
+    confirmed_only: bool = False,
 ) -> dict:
     from findings import extract_findings, dedup_findings
     from chains import build_attack_chains
@@ -43,8 +44,9 @@ async def _generate_pentest_report_impl(
             db_path = eng_mod2.ENGAGEMENT_DB
             with sqlite3.connect(db_path) as db:
                 db.row_factory = sqlite3.Row
+                status_filter = "AND status='confirmed'" if confirmed_only else ""
                 rows = db.execute(
-                    "SELECT * FROM eng_findings WHERE engagement_id=? ORDER BY added_at DESC LIMIT 500",
+                    f"SELECT * FROM eng_findings WHERE engagement_id=? {status_filter} ORDER BY added_at DESC LIMIT 500",
                     (active["id"],)
                 ).fetchall()
             for row in rows:
@@ -362,6 +364,7 @@ def _register(mcp, job_mgr):
         host: str = "",
         save_to: str = "",
         format: str = "markdown",
+        confirmed_only: bool = False,
     ) -> dict:
         """Generate a professional finding-based pentest report with attack chains and remediation.
 
@@ -371,7 +374,9 @@ def _register(mcp, job_mgr):
         host: filter by specific host (empty = all hosts)
         save_to: optional file path to save the report (must be under artifacts/, /tmp, or /var/tmp)
         format: 'markdown' (default) or 'html' (self-contained HTML file, suitable for client delivery)
+        confirmed_only: if True, only include findings marked 'confirmed' via update_finding_status.
+                        Use after running a validation agent for a zero-false-positive report.
         """
         return await _generate_pentest_report_impl(
-            job_mgr, title, min_severity, min_confidence, host, save_to, format
+            job_mgr, title, min_severity, min_confidence, host, save_to, format, confirmed_only
         )

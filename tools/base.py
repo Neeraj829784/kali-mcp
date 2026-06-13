@@ -113,3 +113,26 @@ def _kill_pgroup(pid: int):
         threading.Thread(target=force_kill, daemon=True).start()
     except ProcessLookupError:
         pass
+
+
+def safe_save_path(save_to: str) -> str:
+    """Resolve a user-supplied save_to path to an allowlisted directory.
+
+    Allowed: artifacts dir, /tmp, /var/tmp. Raises ValueError otherwise.
+    This blocks path traversal and writes to sensitive locations.
+    """
+    from config import ARTIFACTS_DIR
+    artifacts = os.path.realpath(ARTIFACTS_DIR)
+    candidate = os.path.realpath(save_to) if os.path.isabs(save_to) else \
+        os.path.realpath(os.path.join(artifacts, save_to))
+    allowed = [artifacts, os.path.realpath("/tmp"), os.path.realpath("/var/tmp")]
+    for root in allowed:
+        try:
+            if os.path.commonpath([root, candidate]) == root:
+                return candidate
+        except ValueError:
+            continue
+    raise ValueError(
+        f"save_to must resolve inside {artifacts}, /tmp, or /var/tmp; "
+        f"'{save_to}' resolves outside all of them."
+    )

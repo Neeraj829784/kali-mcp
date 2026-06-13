@@ -70,41 +70,9 @@ def _register(mcp, job_mgr):
         for f in filtered:
             by_severity.setdefault(f["severity"], []).append(f)
 
-        # Identify attack paths
-        attack_paths = []
-        all_titles = " ".join(f.get("title","").lower() for f in all_findings)
-        all_evidence = " ".join(f.get("evidence","").lower() for f in all_findings)
-
-        # SQLi → DB dump path
-        if any("sql injection" in f.get("title","").lower() for f in all_findings):
-            attack_paths.append({
-                "path": "SQL Injection → Data Extraction",
-                "steps": ["Confirm injectable parameter", "Enumerate databases with sqlmap --dbs",
-                          "Dump credentials table", "Use creds for SSH/admin login"],
-                "risk": "critical",
-            })
-
-        # Weak SSH creds path
-        if any("valid credential" in f.get("title","").lower() or "22/ssh" in f.get("title","").lower()
-               for f in all_findings):
-            attack_paths.append({
-                "path": "Valid Credentials → System Access",
-                "steps": ["Use creds_use() to retrieve found credentials",
-                          "Run ssh_exec(host, user, pass, 'id')",
-                          "Run ssh_enum_privesc() for local privilege escalation"],
-                "risk": "critical",
-            })
-
-        # Web admin panel path
-        if any("/admin" in f.get("evidence","").lower() or "admin" in f.get("title","").lower()
-               for f in all_findings):
-            attack_paths.append({
-                "path": "Admin Panel Discovered",
-                "steps": ["Test default credentials (admin/admin, admin/password)",
-                          "Check for CVEs in the admin software version",
-                          "Look for file upload or RCE functionality"],
-                "risk": "high",
-            })
+        # Identify attack paths using the chain engine (replaces hardcoded logic)
+        from chains import build_attack_chains
+        attack_paths = build_attack_chains(all_findings)
 
         # Quick wins
         quick_wins = []

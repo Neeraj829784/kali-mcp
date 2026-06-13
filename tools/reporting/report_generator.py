@@ -12,6 +12,7 @@ async def _generate_pentest_report_impl(
     min_confidence: str = "low",
     host: str = "",
     save_to: str = "",
+    format: str = "markdown",
 ) -> dict:
     from findings import extract_findings, dedup_findings
     from chains import build_attack_chains
@@ -161,7 +162,13 @@ async def _generate_pentest_report_impl(
     lines.append(f"- **Report generated:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
 
     report_md = "\n".join(lines)
-    result: dict = {"report": report_md, "format": "markdown", "findings_count": len(filtered), "chains_count": len(chains)}
+    report_out = _md_to_html(title, report_md) if format == "html" else report_md
+    result: dict = {
+        "report": report_out,
+        "format": format if format in ("markdown", "html") else "markdown",
+        "findings_count": len(filtered),
+        "chains_count": len(chains),
+    }
 
     if save_to:
         from tools.web.web_tools import _safe_save_path
@@ -171,7 +178,7 @@ async def _generate_pentest_report_impl(
             if dirpath:
                 os.makedirs(dirpath, exist_ok=True)
             with open(path, "w", encoding="utf-8") as f:
-                f.write(report_md)
+                f.write(report_out)
             result["saved_to"] = path
         except ValueError as e:
             result["save_error"] = str(e)
@@ -179,6 +186,88 @@ async def _generate_pentest_report_impl(
             result["save_error"] = f"Failed to save: {e}"
 
     return result
+
+
+_SEV_COLOR = {
+    "critical": "#c0392b", "high": "#e67e22",
+    "medium": "#f1c40f", "low": "#27ae60", "info": "#2980b9",
+}
+
+_HTML_CSS = """
+body{font-family:Arial,sans-serif;max-width:960px;margin:40px auto;padding:0 20px;color:#222;line-height:1.6}
+h1{border-bottom:3px solid #2c3e50;padding-bottom:10px;color:#2c3e50}
+h2{border-left:4px solid #2980b9;padding-left:10px;color:#2c3e50;margin-top:40px}
+h3{margin-top:24px}
+.badge{display:inline-block;padding:2px 10px;border-radius:12px;color:#fff;font-size:0.8em;font-weight:bold;text-transform:uppercase;margin-right:6px}
+.exec-box{background:#eaf4fb;border-left:4px solid #2980b9;padding:12px 18px;margin:16px 0;border-radius:4px}
+.chain-box{background:#fdf6ec;border-left:4px solid #e67e22;padding:12px 18px;margin:16px 0;border-radius:4px}
+.finding-card{background:#f9f9f9;border:1px solid #ddd;border-radius:6px;padding:14px 18px;margin:12px 0}
+.finding-card .label{font-weight:bold;color:#555;min-width:110px;display:inline-block}
+code,pre{background:#f4f4f4;padding:2px 6px;border-radius:3px;font-size:0.9em}
+pre{padding:10px;overflow-x:auto;white-space:pre-wrap}
+table{border-collapse:collapse;width:100%}
+td,th{border:1px solid #ddd;padding:8px 12px;text-align:left}
+th{background:#2c3e50;color:#fff}
+"""
+
+
+def _badge(severity: str) -> str:
+    color = _SEV_COLOR.get(severity.lower(), "#888")
+    return f'<span class="badge" style="background:{color}">{severity.upper()}</span>'
+
+
+def _md_to_html(title: str, md: str) -> str:
+    """Convert the Markdown report to a self-contained, client-ready HTML file."""
+    try:
+        import markdown as md_lib  # type: ignore
+        body = md_lib.markdown(md, extensions=["tables", "fenced_code"])
+    except ImportError:
+        # Fallback: block-level + inline regex conversion without the markdown library
+        import re
+        blocks = re.split(r"\n\n+", md)
+        parts = []
+        for block in blocks:
+            block = block.strip()
+            if not block:
+                continue
+            # Inline formatting
+            block = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", block)
+            block = re.sub(r"`(.+?)`", r"<code>\1</code>", block)
+            if re.match(r"^### ", block):
+                block = re.sub(r"^### (.+)$", r"<h3>\1</h3>", block, flags=re.MULTILINE)
+            elif re.match(r"^## ", block):
+                block = re.sub(r"^## (.+)$", r"<h2>\1</h2>", block, flags=re.MULTILINE)
+            elif re.match(r"^# ", block):
+                block = re.sub(r"^# (.+)$", r"<h1>\1</h1>", block, flags=re.MULTILINE)
+            elif re.match(r"^- ", block, re.MULTILINE):
+                items = "\n".join(
+                    f"<li>{line[2:]}</li>" for line in block.splitlines() if line.startswith("- ")
+                )
+                block = f"<ul>{items}</ul>"
+            elif not block.startswith("<"):
+                block = f"<p>{block}</p>"
+            parts.append(block)
+        body = "\n".join(parts)
+
+    # colour-code severity badges in rendered HTML
+    for sev, color in _SEV_COLOR.items():
+        body = body.replace(
+            f"[{sev.upper()}]",
+            f'<span class="badge" style="background:{color}">{sev.upper()}</span>',
+        )
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{title}</title>
+<style>{_HTML_CSS}</style>
+</head>
+<body>
+{body}
+</body>
+</html>"""
 
 
 def _register(mcp, job_mgr):
@@ -272,9 +361,17 @@ def _register(mcp, job_mgr):
         min_confidence: str = "low",
         host: str = "",
         save_to: str = "",
+        format: str = "markdown",
     ) -> dict:
         """Generate a professional finding-based pentest report with attack chains and remediation.
 
+        title: report title
+        min_severity: minimum severity to include — info, low, medium, high, critical
+        min_confidence: minimum confidence to include — low, medium, high
+        host: filter by specific host (empty = all hosts)
         save_to: optional file path to save the report (must be under artifacts/, /tmp, or /var/tmp)
+        format: 'markdown' (default) or 'html' (self-contained HTML file, suitable for client delivery)
         """
-        return await _generate_pentest_report_impl(job_mgr, title, min_severity, min_confidence, host, save_to)
+        return await _generate_pentest_report_impl(
+            job_mgr, title, min_severity, min_confidence, host, save_to, format
+        )

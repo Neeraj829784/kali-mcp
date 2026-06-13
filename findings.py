@@ -4,7 +4,6 @@ Every tool result passes through normalize() which returns a list of Finding dic
 """
 import json
 import re
-from typing import Any
 
 # Severity levels
 CRITICAL, HIGH, MEDIUM, LOW, INFO = "critical", "high", "medium", "low", "info"
@@ -250,11 +249,10 @@ def _from_enum4linux(output: str, host: str) -> list[dict]:
             severity=LOW, evidence=f"user:[{user}]",
             tool="enum4linux", confidence=CONF_HIGH,
         ))
-    # Shares
-    for m in re.finditer(r"Sharename\s+Type.*?(?=^[-\\])", output, re.DOTALL | re.MULTILINE):
-        block = m.group(0)
-        for share_m in re.finditer(r"^(\S+)\s+(Disk|IPC|Printer)", block, re.MULTILINE):
-            share = share_m.group(1)
+    # Shares — simpler: find lines with a share type (Disk/IPC/Printer) anywhere
+    for m in re.finditer(r"^\s*(\S+)\s+(Disk|IPC\$?|Printer)", output, re.MULTILINE):
+        share = m.group(1).strip()
+        if share and share not in ("Sharename", "Type", "-"):
             findings.append(_finding(
                 host=host, title=f"SMB share accessible: {share}",
                 severity=LOW, evidence=f"Share: {share}",
@@ -463,7 +461,7 @@ async def verify_web_findings(findings: list[dict], base_url: str,
     base = base_url if base_url.endswith("/") else base_url + "/"
 
     try:
-        async with httpx.AsyncClient(follow_redirects=False, timeout=8, verify=False) as client:
+        async with httpx.AsyncClient(follow_redirects=False, timeout=8, verify=False) as client:  # noqa: S501 — pentest tool, self-signed certs expected
             # Wildcard baseline from a path that should not exist
             rand = secrets.token_hex(16)
             try:

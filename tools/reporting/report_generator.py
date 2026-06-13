@@ -173,7 +173,7 @@ async def _generate_pentest_report_impl(
     }
 
     if save_to:
-        from tools.web.web_tools import _safe_save_path
+        from tools.base import safe_save_path as _safe_save_path
         try:
             path = _safe_save_path(save_to)
             dirpath = os.path.dirname(path)

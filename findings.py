@@ -169,6 +169,180 @@ def _from_searchsploit(output: str, host: str) -> list[dict]:
 
 # ── Main dispatcher ───────────────────────────────────────────────────────────
 
+
+def _from_ffuf(output: str, host: str) -> list[dict]:
+    """Extract endpoints found by ffuf (JSON or plain text output)."""
+    findings = []
+    # Try JSON lines first
+    for line in output.splitlines():
+        try:
+            obj = json.loads(line.strip())
+            # ffuf JSON result line: {"input":{"FUZZ":"..."}, "url":"...", "status":200, ...}
+            url = obj.get("url", "")
+            status = obj.get("status", 0)
+            length = obj.get("length", 0)
+            if url and status in (200, 301, 302, 403):
+                findings.append(_finding(
+                    host=host, title=f"Found endpoint {url} [{status}]",
+                    severity=LOW, evidence=f"HTTP {status}, {length} bytes",
+                    tool="ffuf", confidence=CONF_LOW,
+                ))
+        except Exception:
+            pass
+    if findings:
+        return findings
+    # Fallback: plain text "Status: 200" lines
+    for m in re.finditer(r"(https?://\S+)\s+\[Status:\s*(\d+),", output):
+        url, status = m.group(1), int(m.group(2))
+        if status in (200, 301, 302, 403):
+            findings.append(_finding(
+                host=host, title=f"Found endpoint {url} [{status}]",
+                severity=LOW, evidence=f"HTTP {status}",
+                tool="ffuf", confidence=CONF_LOW,
+            ))
+    return findings
+
+
+def _from_wpscan(output: str, host: str) -> list[dict]:
+    """Extract findings from wpscan JSON output."""
+    findings = []
+    try:
+        data = json.loads(output)
+    except Exception:
+        # Plain text fallback: look for [!] lines
+        for line in output.splitlines():
+            if line.strip().startswith("[!]") and len(line) > 5:
+                findings.append(_finding(
+                    host=host, title=line.strip()[3:80],
+                    severity=MEDIUM, evidence=line.strip(),
+                    tool="wpscan", confidence=CONF_MEDIUM,
+                ))
+        return findings
+    # JSON: vulnerable plugins
+    for name, plugin in (data.get("plugins") or {}).items():
+        for vuln in (plugin.get("vulnerabilities") or []):
+            title = vuln.get("title", f"WPScan: {name}")
+            cvss = vuln.get("cvss", {})
+            sev = HIGH if cvss.get("score", 0) >= 7 else MEDIUM
+            findings.append(_finding(
+                host=host, title=title,
+                severity=sev, evidence=str(vuln.get("references", {}))[:300],
+                tool="wpscan", confidence=CONF_MEDIUM,
+            ))
+    # JSON: users found
+    for user in (data.get("users") or {}).keys():
+        findings.append(_finding(
+            host=host, title=f"WordPress user enumerated: {user}",
+            severity=LOW, evidence=f"User: {user}",
+            tool="wpscan", confidence=CONF_HIGH,
+        ))
+    return findings
+
+
+def _from_enum4linux(output: str, host: str) -> list[dict]:
+    """Extract users, shares, and policy findings from enum4linux output."""
+    findings = []
+    # Users
+    for m in re.finditer(r"user:\[(\S+)\]\s+rid:\[", output):
+        user = m.group(1)
+        findings.append(_finding(
+            host=host, title=f"SMB user enumerated: {user}",
+            severity=LOW, evidence=f"user:[{user}]",
+            tool="enum4linux", confidence=CONF_HIGH,
+        ))
+    # Shares
+    for m in re.finditer(r"Sharename\s+Type.*?(?=^[-\\])", output, re.DOTALL | re.MULTILINE):
+        block = m.group(0)
+        for share_m in re.finditer(r"^(\S+)\s+(Disk|IPC|Printer)", block, re.MULTILINE):
+            share = share_m.group(1)
+            findings.append(_finding(
+                host=host, title=f"SMB share accessible: {share}",
+                severity=LOW, evidence=f"Share: {share}",
+                tool="enum4linux", confidence=CONF_HIGH,
+            ))
+    # Null session
+    if "allows sessions using username" in output.lower() or "session setup ok" in output.lower():
+        findings.append(_finding(
+            host=host, title="SMB null session allowed",
+            severity=MEDIUM, evidence="Null session enumeration succeeded",
+            tool="enum4linux", confidence=CONF_HIGH,
+        ))
+    return findings
+
+
+def _from_theharvester(output: str, host: str) -> list[dict]:
+    """Extract emails and subdomains from theHarvester output."""
+    findings = []
+    # Emails
+    emails = re.findall(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", output)
+    for email in set(emails):
+        findings.append(_finding(
+            host=host, title=f"Email found: {email}",
+            severity=INFO, evidence=email,
+            tool="theharvester", confidence=CONF_HIGH,
+        ))
+    # Subdomains/IPs
+    for m in re.finditer(r"^\s*(\S+\.\S+):\s*(\d+\.\d+\.\d+\.\d+)", output, re.MULTILINE):
+        subdomain, ip = m.group(1), m.group(2)
+        findings.append(_finding(
+            host=host, title=f"Subdomain discovered: {subdomain} ({ip})",
+            severity=INFO, evidence=f"{subdomain} -> {ip}",
+            tool="theharvester", confidence=CONF_HIGH,
+        ))
+    return findings
+
+
+def _from_subdomains(output: str, host: str, tool: str) -> list[dict]:
+    """Extract subdomains from amass/subfinder output (one per line)."""
+    findings = []
+    for line in output.splitlines():
+        subdomain = line.strip()
+        if subdomain and "." in subdomain and not subdomain.startswith("#"):
+            findings.append(_finding(
+                host=host, title=f"Subdomain discovered: {subdomain}",
+                severity=INFO, evidence=subdomain,
+                tool=tool, confidence=CONF_HIGH,
+            ))
+    return findings[:200]  # cap to avoid flooding from large wordlists
+
+
+def _from_amass(output: str, host: str) -> list[dict]:
+    return _from_subdomains(output, host, "amass")
+
+
+def _from_subfinder(output: str, host: str) -> list[dict]:
+    return _from_subdomains(output, host, "subfinder")
+
+
+def _from_ssh_enum_privesc(output: str, host: str) -> list[dict]:
+    """Extract privilege escalation vectors from ssh_enum_privesc output."""
+    findings = []
+    # SUID binaries
+    suid_binaries = re.findall(r"(/(?:usr/)?(?:bin|sbin)/\S+)", output)
+    if suid_binaries:
+        findings.append(_finding(
+            host=host, title=f"SUID binaries found ({len(suid_binaries)} total)",
+            severity=MEDIUM, evidence=", ".join(suid_binaries[:10]),
+            tool="ssh_enum_privesc", confidence=CONF_HIGH,
+        ))
+    # Sudo permissions
+    if re.search(r"\(ALL\).*NOPASSWD|\(root\)", output):
+        findings.append(_finding(
+            host=host, title="Sudo NOPASSWD or root permissions found",
+            severity=HIGH, evidence=re.search(r"sudo.*", output, re.IGNORECASE).group(0)[:200] if re.search(r"sudo.*", output, re.IGNORECASE) else "",
+            tool="ssh_enum_privesc", confidence=CONF_HIGH,
+        ))
+    # Capabilities
+    caps = re.findall(r"(/\S+) = (cap_\S+)", output)
+    if caps:
+        findings.append(_finding(
+            host=host, title=f"Linux capabilities found: {caps[0][1]}",
+            severity=MEDIUM, evidence=str(caps[:5]),
+            tool="ssh_enum_privesc", confidence=CONF_HIGH,
+        ))
+    return findings
+
+
 _EXTRACTORS = {
     "nuclei": _from_nuclei_jsonl,
     "nmap_port_scan": _from_nmap,
@@ -181,6 +355,13 @@ _EXTRACTORS = {
     "sqlmap": _from_sqlmap,
     "hydra": _from_hydra,
     "searchsploit": _from_searchsploit,
+    "ffuf": _from_ffuf,
+    "wpscan": _from_wpscan,
+    "enum4linux": _from_enum4linux,
+    "theharvester": _from_theharvester,
+    "amass": _from_amass,
+    "subfinder": _from_subfinder,
+    "ssh_enum_privesc": _from_ssh_enum_privesc,
 }
 
 

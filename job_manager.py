@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 import signal
 import tempfile
@@ -10,6 +11,8 @@ import aiosqlite
 
 from config import JOBS_DB_PATH, ARTIFACTS_DIR
 from tools.base import ToolExecutor, _kill_pgroup
+
+_log = logging.getLogger(__name__)
 
 # Retry configuration
 # Only transient failures are retried (timeout, process crash).
@@ -44,11 +47,11 @@ class JobManager:
             try:
                 await db.execute("ALTER TABLE jobs ADD COLUMN output_file TEXT")
             except Exception:
-                pass
+                pass  # column already exists — expected on upgrade
             try:
                 await db.execute("ALTER TABLE jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0")
             except Exception:
-                pass
+                pass  # column already exists — expected on upgrade
             await db.commit()
         await self._reap_ghost_jobs()
         await self._purge_old_jobs()
@@ -148,7 +151,8 @@ class JobManager:
                 if suggestions:
                     result["suggested_next"] = suggestions
             except Exception:
-                pass
+                _log.debug("Finding extraction failed for tool=%s job=%s",
+                           tool, job_id, exc_info=True)
 
         return result
 

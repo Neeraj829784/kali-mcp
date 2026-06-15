@@ -88,6 +88,56 @@ def test_parse_nmap_xml_no_hosts():
     assert result["hosts"] == []
 
 
+def test_gobuster_dns_extractor():
+    """gobuster_dns output must produce subdomain findings."""
+    from findings import extract_findings
+    output = (
+        "Found: dev.example.com\n"
+        "Found: staging.example.com [192.168.1.10]\n"
+        "Found: api.example.com\n"
+        "Progress: 100/1000 [10%]\n"
+    )
+    results = extract_findings("gobuster_dns", output, "example.com")
+    assert len(results) == 3
+    titles = [r["title"] for r in results]
+    assert "Subdomain discovered: dev.example.com" in titles
+    assert "Subdomain discovered: staging.example.com" in titles
+    assert "Subdomain discovered: api.example.com" in titles
+    # Confidence should be HIGH (gobuster dns confirmed the subdomain)
+    for r in results:
+        assert r["confidence"] == "high"
+        assert r["tool"] == "gobuster_dns"
+
+
+def test_gobuster_dns_strips_ip_brackets():
+    """IP address in brackets must be stripped from subdomain title."""
+    from findings import extract_findings
+    output = "Found: test.example.com [10.0.0.1]\n"
+    results = extract_findings("gobuster_dns", output, "example.com")
+    assert len(results) == 1
+    # Should not have brackets in the title
+    assert "[" not in results[0]["title"]
+    assert "test.example.com" in results[0]["title"]
+
+
+def test_extract_findings_logs_on_exception(caplog):
+    """extract_findings must log at DEBUG level when extractor raises, not silently pass."""
+    import logging
+    from findings import _EXTRACTORS, extract_findings
+
+    # Temporarily replace an extractor with one that raises
+    original = _EXTRACTORS["nmap_port_scan"]
+    _EXTRACTORS["nmap_port_scan"] = lambda output, host: (_ for _ in ()).throw(ValueError("test error"))
+
+    with caplog.at_level(logging.DEBUG, logger="findings"):
+        results = extract_findings("nmap_port_scan", "some output", "10.0.0.1")
+
+    _EXTRACTORS["nmap_port_scan"] = original  # restore
+    assert results == []
+    # Should have logged the exception
+    assert any("nmap_port_scan" in r.message for r in caplog.records)
+
+
 # ── Cred vault ────────────────────────────────────────────────────────────────
 
 def test_cred_vault_encrypt_decrypt_roundtrip():

@@ -42,11 +42,12 @@ def _register(mcp, job_mgr):
         if intensity == "deep" and shutil.which("masscan"):
             # masscan fast discovery across all 65535 ports
             import tempfile, os, re
-            from config import ARTIFACTS_DIR
+            from config import ARTIFACTS_DIR, MASSCAN_RATE
+            masscan_rate = MASSCAN_RATE.get(intensity, 5000)
             masscan_out = os.path.join(ARTIFACTS_DIR, f"masscan_{target.replace('/', '_').replace(':', '_')}.txt")
             masscan_result = await _ex.run(
                 ["sudo", "-n", "masscan", target, "-p", "0-65535",
-                 "--rate", "10000", "-oL", masscan_out, "--wait", "3"],
+                 "--rate", str(masscan_rate), "-oL", masscan_out, "--wait", "3"],
                 timeout=120, tool_name="masscan"
             )
             open_ports: list[int] = []
@@ -305,6 +306,6 @@ async def _crawl_simple(url: str, max_pages: int = 30) -> dict:
                     if urlparse(abs_url).netloc == base.netloc and abs_url not in visited:
                         queue.append(abs_url)
             except Exception:
-                pass
+                pass  # per-URL errors (timeout, SSL, DNS) must not kill the whole crawl
 
     return {"pages_visited": len(visited), "interesting": interesting, "all_urls": sorted(visited)}

@@ -51,6 +51,16 @@ RATE_LIMITS = {
     "nikto": 0,
     "hydra": 16,
     "sqlmap": 0,
+    # masscan rate is packets-per-second, not requests/sec — handled separately
+    # in workflow.py via MASSCAN_RATE. Kept here for documentation/override.
+    "masscan": 5000,
+}
+
+# masscan PPS defaults — configurable per intensity level
+MASSCAN_RATE = {
+    "light":  1000,   # stealthy — suitable for VPN/remote targets
+    "normal": 5000,   # default — balanced speed vs reliability
+    "deep":   10000,  # fast — LAN/local targets only
 }
 
 # Seclists fallback wordlists

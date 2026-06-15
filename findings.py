@@ -343,6 +343,109 @@ def _from_ssh_enum_privesc(output: str, host: str) -> list[dict]:
     return findings
 
 
+def _from_nmap_os(output: str, host: str) -> list[dict]:
+    """Extract OS detection results from nmap -O output.
+
+    nmap OS detection prints lines like:
+      OS details: Linux 4.15 - 5.6
+      Running: Linux 4.X|5.X
+      Aggressive OS guesses: Linux 5.4 (96%)
+    """
+    findings = []
+    # Best OS guess line
+    for m in re.finditer(r"OS details:\s+(.+)", output):
+        findings.append(_finding(
+            host=host,
+            title=f"OS detected: {m.group(1).strip()}",
+            severity=INFO,
+            evidence=m.group(0).strip(),
+            tool="nmap_os_detection",
+            confidence=CONF_HIGH,
+        ))
+    # Aggressive guess with confidence percentage
+    if not findings:
+        for m in re.finditer(r"Aggressive OS guesses:\s+(.+?)(?:\n|$)", output):
+            # Take only the first (highest confidence) guess
+            first = m.group(1).split(",")[0].strip()
+            findings.append(_finding(
+                host=host,
+                title=f"OS guess: {first}",
+                severity=INFO,
+                evidence=m.group(1).strip(),
+                tool="nmap_os_detection",
+                confidence=CONF_MEDIUM,
+            ))
+    # Running: line
+    for m in re.finditer(r"Running(?:\s+\(JUST GUESSING\))?:\s+(.+)", output):
+        os_running = m.group(1).strip()
+        if not any(f["title"].endswith(os_running) for f in findings):
+            findings.append(_finding(
+                host=host,
+                title=f"OS running: {os_running}",
+                severity=INFO,
+                evidence=os_running,
+                tool="nmap_os_detection",
+                confidence=CONF_MEDIUM,
+            ))
+    return findings
+
+
+def _from_msf_run_module(output: str, host: str) -> list[dict]:
+    """Extract Metasploit module results — sessions opened, loot captured.
+
+    Parses msfconsole output for:
+      - Meterpreter/shell sessions opened (critical — system access confirmed)
+      - Successful auxiliary module results (high)
+      - Module completion messages (info)
+    """
+    findings = []
+
+    # Session opened — full system access achieved
+    for m in re.finditer(
+        r"(Meterpreter session|Command shell session|session \d+) "
+        r"opened\s+\(([^)]+)\)",
+        output, re.IGNORECASE
+    ):
+        session_type = m.group(1)
+        connection = m.group(2).strip()
+        findings.append(_finding(
+            host=host,
+            title=f"Metasploit session opened: {session_type}",
+            severity=CRITICAL,
+            evidence=f"{session_type} opened ({connection})",
+            tool="msf_run_module",
+            confidence=CONF_HIGH,
+        ))
+
+    # Successful exploit / module completion
+    for m in re.finditer(r"\[\+\]\s+(.+)", output):
+        line = m.group(1).strip()
+        # Skip generic verbose lines
+        if len(line) > 10 and not any(skip in line.lower() for skip in
+                                       ("starting", "running", "connecting", "sending")):
+            findings.append(_finding(
+                host=host,
+                title=f"Metasploit: {line[:80]}",
+                severity=HIGH,
+                evidence=line,
+                tool="msf_run_module",
+                confidence=CONF_MEDIUM,
+            ))
+
+    # Loot / credential capture
+    for m in re.finditer(r"Loot:.*?path:\s*(\S+)", output, re.IGNORECASE):
+        findings.append(_finding(
+            host=host,
+            title=f"Metasploit loot captured",
+            severity=HIGH,
+            evidence=f"Loot path: {m.group(1)}",
+            tool="msf_run_module",
+            confidence=CONF_HIGH,
+        ))
+
+    return findings
+
+
 def _from_gobuster_dns(output: str, host: str) -> list[dict]:
     """Extract discovered subdomains from gobuster dns output.
 
@@ -377,6 +480,8 @@ _EXTRACTORS = {
     "gobuster_dir": _from_gobuster,
     "gobuster_vhost": _from_gobuster,
     "gobuster_dns": _from_gobuster_dns,
+    "nmap_os_detection": _from_nmap_os,
+    "msf_run_module": _from_msf_run_module,
     "sqlmap": _from_sqlmap,
     "hydra": _from_hydra,
     "searchsploit": _from_searchsploit,

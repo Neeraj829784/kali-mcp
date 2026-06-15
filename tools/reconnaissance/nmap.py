@@ -1,4 +1,5 @@
 import os
+import re
 
 from config import TOOL_TIMEOUTS
 from scope import check_scope
@@ -7,6 +8,29 @@ from parsers import parse_nmap_xml
 
 _ex = ToolExecutor()
 _IS_ROOT = os.geteuid() == 0
+
+# Allowlist for nmap target tokens — IPs, CIDRs, hostnames, ranges, wildcards.
+# Blocks flag injection like '--script=evil' or path traversal '/etc/passwd'.
+# Rules:
+#   - Must not start with '-' (no flag injection)
+#   - '/' only allowed as CIDR notation (digit/digit) — not as path separator
+#   - No shell metacharacters: ; | & $ ` ! ( ) { } < > \
+_VALID_TARGET = re.compile(
+    r'^(?!-)(?!/)[\w.\-:*\[\]]+(?:/\d+)?$'
+)
+
+
+def _validate_targets(targets: str) -> list[str]:
+    """Split and validate target tokens. Raises ValueError on suspicious input."""
+    tokens = targets.split()
+    if not tokens:
+        raise ValueError("targets must not be empty")
+    for t in tokens:
+        if not _VALID_TARGET.match(t):
+            raise ValueError(
+                f"Invalid target token '{t}' — only IPs, CIDRs, hostnames, and ranges allowed"
+            )
+    return tokens
 
 
 def _register(mcp, job_mgr):
@@ -17,9 +41,13 @@ def _register(mcp, job_mgr):
         Ping scan to discover live hosts (-sn). Fast, no port scan.
         targets: IPs, ranges, or CIDR (e.g. '192.168.1.0/24', '10.0.0.1-10')
         """
-        for t in targets.split():
+        try:
+            tokens = _validate_targets(targets)
+        except ValueError as e:
+            return {"error": str(e), "return_code": -1}
+        for t in tokens:
             check_scope(t)
-        cmd = ["nmap", "-sn"] + targets.split()
+        cmd = ["nmap", "-sn"] + tokens
         return await _ex.run(cmd, timeout=TOOL_TIMEOUTS["nmap_host_discovery"])
 
     @mcp.tool()
@@ -39,7 +67,11 @@ def _register(mcp, job_mgr):
         timing: T0-T5 (T4=fast, T3=normal, T2=polite)
         wait: if True, blocks until scan completes and returns full output
         """
-        for t in targets.split():
+        try:
+            tokens = _validate_targets(targets)
+        except ValueError as e:
+            return {"error": str(e), "return_code": -1}
+        for t in tokens:
             check_scope(t)
         if ports == "top100":
             port_args = ["--top-ports", "100"]
@@ -48,7 +80,7 @@ def _register(mcp, job_mgr):
         effective_type = scan_type
         if scan_type == "auto":
             effective_type = "sS" if _IS_ROOT else "sT"
-        cmd = ["nmap", f"-{effective_type}", f"-{timing}"] + port_args + targets.split()
+        cmd = ["nmap", f"-{effective_type}", f"-{timing}"] + port_args + tokens
         if wait:
             return await job_mgr.run_and_wait("nmap_port_scan", cmd, TOOL_TIMEOUTS["nmap_port_scan"])
         return {"job_id": await job_mgr.create_job("nmap_port_scan", cmd, TOOL_TIMEOUTS["nmap_port_scan"]),
@@ -64,10 +96,14 @@ def _register(mcp, job_mgr):
         Detect service versions on open ports (-sV).
         version_intensity: 0 (light) to 9 (try all probes)
         """
-        for t in targets.split():
+        try:
+            tokens = _validate_targets(targets)
+        except ValueError as e:
+            return {"error": str(e), "return_code": -1}
+        for t in tokens:
             check_scope(t)
         cmd = ["nmap", "-sV", "--version-intensity", str(version_intensity),
-               "-p", ports] + targets.split()
+               "-p", ports] + tokens
         return await job_mgr.run_and_wait("nmap_service_detection", cmd, TOOL_TIMEOUTS["nmap_service_detection"])
 
     @mcp.tool()
@@ -76,9 +112,13 @@ def _register(mcp, job_mgr):
         OS detection scan (-O). Automatically uses sudo if not root.
         targets: IPs/ranges/hostnames
         """
-        for t in targets.split():
+        try:
+            tokens = _validate_targets(targets)
+        except ValueError as e:
+            return {"error": str(e), "return_code": -1}
+        for t in tokens:
             check_scope(t)
-        base = ["nmap", "-O", "--osscan-guess"] + targets.split()
+        base = ["nmap", "-O", "--osscan-guess"] + tokens
         cmd = base if _IS_ROOT else ["sudo", "-n"] + base
         return await job_mgr.run_and_wait("nmap_os_detection", cmd, TOOL_TIMEOUTS["nmap_os_detection"])
 
@@ -93,9 +133,13 @@ def _register(mcp, job_mgr):
         scripts: NSE script categories — 'vuln', 'safe', 'vuln and safe',
                  'exploit', or specific scripts like 'smb-vuln-ms17-010'
         """
-        for t in targets.split():
+        try:
+            tokens = _validate_targets(targets)
+        except ValueError as e:
+            return {"error": str(e), "return_code": -1}
+        for t in tokens:
             check_scope(t)
-        cmd = ["nmap", f"--script={scripts}", "-p", ports] + targets.split()
+        cmd = ["nmap", f"--script={scripts}", "-p", ports] + tokens
         return await job_mgr.run_and_wait("nmap_vuln_scan", cmd, TOOL_TIMEOUTS["nmap_vuln_scan"])
 
     @mcp.tool()
@@ -104,9 +148,13 @@ def _register(mcp, job_mgr):
         Aggressive scan (-A): OS + version + default scripts + traceroute.
         targets: IPs/ranges/hostnames
         """
-        for t in targets.split():
+        try:
+            tokens = _validate_targets(targets)
+        except ValueError as e:
+            return {"error": str(e), "return_code": -1}
+        for t in tokens:
             check_scope(t)
-        cmd = ["nmap", "-A", "-p", ports] + targets.split()
+        cmd = ["nmap", "-A", "-p", ports] + tokens
         return await job_mgr.run_and_wait("nmap_aggressive_scan", cmd, TOOL_TIMEOUTS["nmap_aggressive_scan"])
 
     @mcp.tool()
@@ -129,7 +177,11 @@ def _register(mcp, job_mgr):
         Returns: structured dict with hosts[], each containing ports[], services, os[]
         """
         import tempfile
-        for t in targets.split():
+        try:
+            tokens = _validate_targets(targets)
+        except ValueError as e:
+            return {"error": str(e), "return_code": -1}
+        for t in tokens:
             check_scope(t)
 
         if ports == "top100":
@@ -148,7 +200,7 @@ def _register(mcp, job_mgr):
             cmd = ["nmap", f"-{effective_type}", f"-{timing}", "-oX", xml_path]
             if service_detection:
                 cmd += ["-sV", "--version-intensity", "5"]
-            cmd += port_args + targets.split()
+            cmd += port_args + tokens
 
             result = await _ex.run(cmd, timeout=TOOL_TIMEOUTS["nmap_port_scan"],
                                    tool_name="nmap_port_scan")
@@ -159,16 +211,15 @@ def _register(mcp, job_mgr):
                 xml_content = f.read()
 
             parsed = parse_nmap_xml(xml_content)
-            parsed["raw_output"] = result.get("stdout", "")[:500]  # brief summary
+            parsed["raw_output"] = result.get("stdout", "")[:500]
 
-            # Auto-extract findings from the text output too
             from findings import extract_findings
             from suggest import suggest_next
-            findings = extract_findings("nmap_port_scan", result.get("stdout", ""), targets.split()[0])
+            findings = extract_findings("nmap_port_scan", result.get("stdout", ""), tokens[0])
             if findings:
                 parsed["findings"] = findings
                 parsed["findings_count"] = len(findings)
-            suggestions = suggest_next("nmap_port_scan", result.get("stdout", ""), targets.split()[0])
+            suggestions = suggest_next("nmap_port_scan", result.get("stdout", ""), tokens[0])
             if suggestions:
                 parsed["suggested_next"] = suggestions
 

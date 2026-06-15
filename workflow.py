@@ -266,42 +266,17 @@ async def _screenshot_urls_inline(urls: list[str], job_mgr) -> dict:
         "--write-jsonl", os.path.join(screenshots_dir, "results.jsonl"),
         "--quiet",
     ]
-    result = await job_mgr.run_and_wait("gowitness", cmd, 120)
-    os.unlink(url_file)
+    try:
+        result = await job_mgr.run_and_wait("gowitness", cmd, 120)
+    finally:
+        if os.path.exists(url_file):
+            os.unlink(url_file)
     screenshots = sorted(
         os.path.join(screenshots_dir, f)
         for f in os.listdir(screenshots_dir)
         if f.endswith(".png")
     )
     return {"screenshot_dir": screenshots_dir, "screenshots": screenshots, "count": len(screenshots)}
-    """Lightweight inline crawler for parallel use."""
-    import re
-    import httpx
-    from urllib.parse import urljoin, urlparse
-    base = urlparse(url)
-    visited: set[str] = set()
-    queue = [url]
-    interesting = []
-    _INT = re.compile(r"(admin|login|upload|api|config|backup|phpinfo|\.git|\.env|password)", re.I)
-
-    async with httpx.AsyncClient(follow_redirects=True, timeout=5) as client:
-        while queue and len(visited) < max_pages:
-            cur = queue.pop(0)
-            if cur in visited:
-                continue
-            visited.add(cur)
-            if _INT.search(cur):
-                interesting.append(cur)
-            try:
-                resp = await client.get(cur)
-                for href in re.findall(r'href=["\']([^"\']+)["\']', resp.text):
-                    abs_url = urljoin(cur, href).split("#")[0]
-                    if urlparse(abs_url).netloc == base.netloc and abs_url not in visited:
-                        queue.append(abs_url)
-            except Exception:
-                pass
-
-    return {"pages_visited": len(visited), "interesting": interesting, "all_urls": sorted(visited)}
 
 
 async def _crawl_simple(url: str, max_pages: int = 30) -> dict:

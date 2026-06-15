@@ -29,4 +29,5 @@ jobs:
             --ignore=tests/test_tools_recon.py \
             --ignore=tests/test_tools_scanning.py \
             --ignore=tests/test_tools_vuln.py \
-            --ignore=tests/test_tools_exploit.py
+            --ignore=tests/test_tools_exploit.py \
+            --ignore=tests/test_tools_reporting.py

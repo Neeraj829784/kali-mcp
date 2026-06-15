@@ -68,8 +68,7 @@ async def _load_findings_fast(job_mgr, host: str) -> tuple[list[dict], dict[str,
         host_services: dict[str, list] = {}
         findings: list[dict] = []
 
-        async with aiosqlite.connect(eng_mod.ENGAGEMENT_DB, timeout=30) as db:
-            db.row_factory = aiosqlite.Row
+        async with eng_mod._get_db() as db:
             query = "SELECT * FROM eng_findings WHERE engagement_id=?"
             params: list = [active["id"]]
             if host:
@@ -104,7 +103,7 @@ async def _load_findings_fast(job_mgr, host: str) -> tuple[list[dict], dict[str,
         output = full.get("output", "")
         if not output:
             continue
-        extracted = extract_findings(j["tool"], output, host or "unknown")
+        extracted = extract_findings(j["tool"], output, host if host else j.get("host", "unknown"))
         for f in extracted:
             f["job_id"] = j["id"]
             f["tool_name"] = j["tool"]

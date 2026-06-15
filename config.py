@@ -10,6 +10,12 @@ SCOPE_FILE = os.path.join(BASE_DIR, "scope.txt")
 os.makedirs(ARTIFACTS_DIR, exist_ok=True)
 os.chmod(ARTIFACTS_DIR, 0o700)
 
+# Webhook — set KALI_MCP_WEBHOOK_URL env var to receive critical finding alerts.
+# Supports any HTTP endpoint that accepts JSON POST (Slack, Discord, Teams, custom).
+# Leave empty to disable notifications.
+WEBHOOK_URL: str = os.environ.get("KALI_MCP_WEBHOOK_URL", "")
+WEBHOOK_MIN_SEVERITY: str = os.environ.get("KALI_MCP_WEBHOOK_MIN_SEVERITY", "critical")
+
 # Per-tool timeouts in seconds
 TOOL_TIMEOUTS = {
     "nmap_host_discovery": 120,

@@ -1,9 +1,11 @@
 """
 Parallel execution workflows — fire multiple tools concurrently, wait for all.
 scan_host: full host recon in parallel (nmap + vulns + web + smb simultaneously)
-scan_web: full web app scan in parallel (nikto + gobuster + nuclei + crawl)
+  deep mode: masscan first-pass for speed, then targeted nmap service detection
+scan_web: full web app scan in parallel (nikto + gobuster + nuclei + crawl + screenshots)
 """
 import asyncio
+import shutil
 
 from scope import check_scope
 
@@ -32,12 +34,50 @@ def _register(mcp, job_mgr):
             "deep": ["-p", "1-65535"],
         }.get(intensity, ["-p", "1-10000"])
 
-        # Phase 1: port scan (must complete first to know what services exist)
+        # Phase 1: port scan
+        # deep mode: masscan first-pass (fast) then targeted nmap -sV on open ports
+        # light/normal: straight nmap -sT -sV
         from tools.reconnaissance.nmap import _ex
-        nmap_result = await _ex.run(
-            ["nmap", "-sT", "-sV", f"-{timing}"] + port_args + [target],
-            timeout={"light": 60, "normal": 300, "deep": 1800}.get(intensity, 300)
-        )
+
+        if intensity == "deep" and shutil.which("masscan"):
+            # masscan fast discovery across all 65535 ports
+            import tempfile, os, re
+            from config import ARTIFACTS_DIR
+            masscan_out = os.path.join(ARTIFACTS_DIR, f"masscan_{target}.txt")
+            masscan_result = await _ex.run(
+                ["sudo", "-n", "masscan", target, "-p", "0-65535",
+                 "--rate", "10000", "-oL", masscan_out, "--wait", "3"],
+                timeout=120, tool_name="masscan"
+            )
+            open_ports: list[int] = []
+            if os.path.exists(masscan_out):
+                with open(masscan_out) as f:
+                    for line in f:
+                        m = re.match(r"open tcp (\d+)", line)
+                        if m:
+                            open_ports.append(int(m.group(1)))
+                os.unlink(masscan_out)
+
+            if open_ports:
+                ports_str = ",".join(str(p) for p in sorted(set(open_ports)))
+                nmap_result = await _ex.run(
+                    ["nmap", "-sT", "-sV", "--version-intensity", "5",
+                     "-T3", "-p", ports_str, target],
+                    timeout=600, tool_name="nmap_service_detection"
+                )
+            else:
+                # fallback: full nmap if masscan found nothing
+                nmap_result = await _ex.run(
+                    ["nmap", "-sT", "-sV", "-T3", "-p", "1-65535", target],
+                    timeout=1800, tool_name="nmap_port_scan"
+                )
+        else:
+            nmap_result = await _ex.run(
+                ["nmap", "-sT", "-sV", f"-{timing}"] + port_args + [target],
+                timeout={"light": 60, "normal": 300, "deep": 1800}.get(intensity, 300),
+                tool_name="nmap_port_scan"
+            )
+
         nmap_output = nmap_result.get("stdout", "")
 
         # Detect open services
@@ -184,11 +224,84 @@ def _register(mcp, job_mgr):
                     "interesting": result.get("interesting", []),
                 }
 
+        # Phase 2: screenshot interesting pages discovered by crawler
+        screenshots_result: dict = {}
+        if depth in ("normal", "deep") and shutil.which("gowitness"):
+            crawl_data = parallel_results.get("crawl", {})
+            interesting_urls = crawl_data.get("interesting", [])
+            # Also always screenshot the root
+            screenshot_targets = list({url} | set(interesting_urls))[:10]
+            if screenshot_targets:
+                try:
+                    screenshots_result = await _screenshot_urls_inline(
+                        screenshot_targets, job_mgr
+                    )
+                except Exception as e:
+                    screenshots_result = {"error": str(e)}
+
         return {
             "target": url,
             "depth": depth,
             "scans": parallel_results,
+            "screenshots": screenshots_result,
         }
+
+
+async def _screenshot_urls_inline(urls: list[str], job_mgr) -> dict:
+    """Take screenshots of a list of URLs and return paths. Used by scan_web."""
+    import tempfile
+    import os
+    from config import ARTIFACTS_DIR
+    screenshots_dir = os.path.join(ARTIFACTS_DIR, "screenshots")
+    os.makedirs(screenshots_dir, exist_ok=True)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, dir=ARTIFACTS_DIR) as f:
+        f.write("\n".join(urls))
+        url_file = f.name
+    cmd = [
+        "gowitness", "scan", "file",
+        "--file", url_file,
+        "--screenshot-path", screenshots_dir,
+        "--threads", "4",
+        "--timeout", "15",
+        "--write-jsonl", os.path.join(screenshots_dir, "results.jsonl"),
+        "--quiet",
+    ]
+    result = await job_mgr.run_and_wait("gowitness", cmd, 120)
+    os.unlink(url_file)
+    screenshots = sorted(
+        os.path.join(screenshots_dir, f)
+        for f in os.listdir(screenshots_dir)
+        if f.endswith(".png")
+    )
+    return {"screenshot_dir": screenshots_dir, "screenshots": screenshots, "count": len(screenshots)}
+    """Lightweight inline crawler for parallel use."""
+    import re
+    import httpx
+    from urllib.parse import urljoin, urlparse
+    base = urlparse(url)
+    visited: set[str] = set()
+    queue = [url]
+    interesting = []
+    _INT = re.compile(r"(admin|login|upload|api|config|backup|phpinfo|\.git|\.env|password)", re.I)
+
+    async with httpx.AsyncClient(follow_redirects=True, timeout=5) as client:
+        while queue and len(visited) < max_pages:
+            cur = queue.pop(0)
+            if cur in visited:
+                continue
+            visited.add(cur)
+            if _INT.search(cur):
+                interesting.append(cur)
+            try:
+                resp = await client.get(cur)
+                for href in re.findall(r'href=["\']([^"\']+)["\']', resp.text):
+                    abs_url = urljoin(cur, href).split("#")[0]
+                    if urlparse(abs_url).netloc == base.netloc and abs_url not in visited:
+                        queue.append(abs_url)
+            except Exception:
+                pass
+
+    return {"pages_visited": len(visited), "interesting": interesting, "all_urls": sorted(visited)}
 
 
 async def _crawl_simple(url: str, max_pages: int = 30) -> dict:

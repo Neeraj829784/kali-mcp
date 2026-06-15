@@ -3,7 +3,10 @@ Finding normalization — extracts structured findings from raw tool output.
 Every tool result passes through normalize() which returns a list of Finding dicts.
 """
 import json
+import logging
 import re
+
+_log = logging.getLogger(__name__)
 
 # Severity levels
 CRITICAL, HIGH, MEDIUM, LOW, INFO = "critical", "high", "medium", "low", "info"
@@ -162,7 +165,7 @@ def _from_searchsploit(output: str, host: str) -> list[dict]:
                 tool="searchsploit", confidence=CONF_LOW,
             ))
     except Exception:
-        pass
+        _log.debug("Failed to parse searchsploit output", exc_info=True)
     return findings
 
 
@@ -176,7 +179,6 @@ def _from_ffuf(output: str, host: str) -> list[dict]:
     for line in output.splitlines():
         try:
             obj = json.loads(line.strip())
-            # ffuf JSON result line: {"input":{"FUZZ":"..."}, "url":"...", "status":200, ...}
             url = obj.get("url", "")
             status = obj.get("status", 0)
             length = obj.get("length", 0)
@@ -187,7 +189,7 @@ def _from_ffuf(output: str, host: str) -> list[dict]:
                     tool="ffuf", confidence=CONF_LOW,
                 ))
         except Exception:
-            pass
+            pass  # line is not JSON — expected for non-JSON ffuf output lines
     if findings:
         return findings
     # Fallback: plain text "Status: 200" lines
@@ -341,6 +343,30 @@ def _from_ssh_enum_privesc(output: str, host: str) -> list[dict]:
     return findings
 
 
+def _from_gobuster_dns(output: str, host: str) -> list[dict]:
+    """Extract discovered subdomains from gobuster dns output.
+
+    gobuster dns prints lines like:
+      Found: sub.example.com
+      Found: dev.example.com [2001:db8::1]
+    """
+    findings = []
+    for m in re.finditer(r"Found:\s+(\S+)", output):
+        subdomain = m.group(1).strip()
+        # Strip trailing IP in brackets if present
+        subdomain = re.sub(r"\s*\[.*\]$", "", subdomain).strip()
+        if subdomain and "." in subdomain:
+            findings.append(_finding(
+                host=host,
+                title=f"Subdomain discovered: {subdomain}",
+                severity=INFO,
+                evidence=subdomain,
+                tool="gobuster_dns",
+                confidence=CONF_HIGH,
+            ))
+    return findings[:200]
+
+
 _EXTRACTORS = {
     "nuclei": _from_nuclei_jsonl,
     "nmap_port_scan": _from_nmap,
@@ -350,6 +376,7 @@ _EXTRACTORS = {
     "nikto": _from_nikto,
     "gobuster_dir": _from_gobuster,
     "gobuster_vhost": _from_gobuster,
+    "gobuster_dns": _from_gobuster_dns,
     "sqlmap": _from_sqlmap,
     "hydra": _from_hydra,
     "searchsploit": _from_searchsploit,
@@ -371,6 +398,7 @@ def extract_findings(tool: str, output: str, host: str) -> list[dict]:
     try:
         return extractor(output, host)
     except Exception:
+        _log.debug("Extractor failed for tool=%s host=%s", tool, host, exc_info=True)
         return []
 
 

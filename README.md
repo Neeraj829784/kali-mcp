@@ -1,204 +1,203 @@
+<div align="center">
+
 # kali-mcp
 
-**AI-assisted penetration testing MCP server for Kali Linux.**
+**AI-powered penetration testing platform for Kali Linux**
 
-Transforms 28+ Kali security tools into structured, AI-consumable MCP tool calls with built-in safety controls, engagement management, credential vaulting, automated finding extraction, and parallel workflow execution.
+[![Tests](https://github.com/Neeraj829784/kali-mcp/actions/workflows/test.yml/badge.svg)](https://github.com/Neeraj829784/kali-mcp/actions)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://python.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
+*81 MCP tools · 21 finding extractors · 25 CVE-specific remediations · 7 attack chain templates · 145 tests*
+
+</div>
+
+---
+
+kali-mcp turns your AI assistant into a hands-on penetration testing partner. It wraps 30+ Kali Linux security tools into structured MCP tool calls — every scan result is automatically parsed into findings, deduplicated across tools, tagged to your engagement, and correlated into attack chains. The AI gets structured data, not raw text.
+
+```
+You: "Scan 10.10.10.5 for vulnerabilities"
+
+AI:  → scan_host(target="10.10.10.5", intensity="normal")
+     → Finds open ports 22, 80, 445
+     → Runs nikto + gobuster + nuclei + enum4linux in parallel
+     → Extracts 14 findings, boosts confidence on corroborated ones
+     → Identifies chain: "Exposed .git + Admin Panel → Credential Leak"
+     → Suggests: hydra on SSH, sqlmap on login form
+     → All findings tagged to your engagement automatically
+```
 
 ---
 
 ## Table of Contents
 
-- [Features](#features)
-- [Architecture](#architecture)
+- [How It Works](#how-it-works)
+- [What Makes It Different](#what-makes-it-different)
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
-- [Tool Catalog](#tool-catalog)
-  - [Reconnaissance](#reconnaissance)
-  - [Scanning](#scanning)
-  - [Vulnerability Assessment](#vulnerability-assessment)
-  - [Exploitation](#exploitation)
-  - [Web Testing](#web-testing)
-  - [Reporting & Analysis](#reporting--analysis)
-  - [Engagement Management](#engagement-management)
+- [Tool Reference](#tool-reference)
 - [Workflows](#workflows)
+- [Finding Pipeline](#finding-pipeline)
+- [Attack Chain Engine](#attack-chain-engine)
+- [Engagement System](#engagement-system)
 - [Security Model](#security-model)
 - [Configuration](#configuration)
-- [Testing](#testing)
-- [Systemd Service](#systemd-service)
-- [Claude Desktop Integration](#claude-desktop-integration)
+- [Webhook Notifications](#webhook-notifications)
 - [Project Structure](#project-structure)
+- [Testing](#testing)
+- [Deployment](#deployment)
 - [Contributing](#contributing)
 - [License](#license)
 
 ---
 
-## Features
+## How It Works
 
-- **28+ MCP Tools** — Wraps nmap, gobuster, nikto, nuclei, sqlmap, hydra, metasploit, wpscan, amass, subfinder, theHarvester, enum4linux, ffuf, searchsploit, gowitness, tshark, and more
-- **Scope Enforcement** — Allowlist-based target authorization prevents accidental unauthorized scanning
-- **Async Job Queue** — Long-running scans run in background with process group management, cancellation support, and partial output reads
-- **Engagement Model** — Named engagements group scope, jobs, findings, and credentials for professional pentest organization
-- **Credential Vault** — Fernet-encrypted SQLite storage for discovered credentials, thread-safe with env-var key support
-- **Confidence-Scored Findings** — Every finding carries a `confidence` level (high/medium/low) separate from severity. Tool-confirmed findings (sqlmap injectable, hydra valid creds, nmap open port) = high; template matches = medium; pattern guesses (nikto, gobuster) = low
-- **Finding Deduplication + Cross-Tool Corroboration** — Identical findings from multiple tools are merged into one; when 2+ distinct tools agree, confidence is boosted automatically
-- **Soft-404 / Wildcard Detection** — Gobuster/ffuf path findings are actively re-verified; wildcard server responses are dropped as false positives; confirmed distinct paths are promoted to high confidence
-- **Nikto Noise Filtering** — Low-value header/info lines are filtered out; only actionable findings (XSS, SQLi, RCE, injection) are kept
-- **Attack Chain Engine** — Correlates small individual findings into compound-impact narratives (e.g. "SQL Injection → Credential Theft → System Access"). Automatically escalates combined severity beyond individual finding severity
-- **Professional Report Generator** — `generate_pentest_report` produces a client-ready Markdown report from vuln findings (not raw scan output): executive summary, attack chains section, findings grouped by severity with evidence + remediation guidance + confidence, scan coverage appendix. Supports `min_severity`, `min_confidence`, and `save_to` file output
-- **Remediation Guidance** — Automatic remediation lookup for 12 vulnerability classes (SQLi, XSS, SMB vulns, file upload, path traversal, credential issues, TLS, CORS, and more)
-- **Auto-Suggest Next Steps** — Chain-of-thought recommendations based on tool findings (e.g., "SSH port found → suggest hydra brute force")
-- **Parallel Workflows** — `scan_host` and `scan_web` fire multiple tools simultaneously, reducing total recon time by 70%+
-- **CVE-to-Exploit Chain** — Given a service version, finds matching exploits in searchsploit and Metasploit automatically
-- **Audit Logging** — Every tool call is logged with timestamp for compliance and review
-- **Health Checks** — Preflight verification of all tool binaries, Python dependencies, and wordlists
-- **PCAP Analysis** — Protocol extraction, credential discovery, and arbitrary tshark queries on captured traffic
-- **Screenshot Recon** — Visual triage of discovered endpoints using gowitness
-- **File Inspection** — Safe file reading with magic byte detection, hex/base64 output, and path restrictions
+```
+┌─────────────────────────────────────────────┐
+│          AI Client (Claude, Kiro, etc.)      │
+└─────────────────┬───────────────────────────┘
+                  │  MCP stdio transport
+                  ▼
+┌─────────────────────────────────────────────┐
+│           FastMCP Server (server.py)         │
+│                                             │
+│  ┌──────────┐  ┌─────────┐  ┌───────────┐  │
+│  │ Job Mgr  │  │  Scope  │  │Engagement │  │
+│  │ (async)  │  │ (allow) │  │ Manager   │  │
+│  │ retry    │  │ thread  │  │ aiosqlite │  │
+│  │ backoff  │  │  safe   │  │           │  │
+│  └──────────┘  └─────────┘  └───────────┘  │
+│                                             │
+│  ┌──────────┐  ┌─────────┐  ┌───────────┐  │
+│  │ Findings │  │ Chains  │  │Remediation│  │
+│  │ 21 tools │  │ 7 temps │  │ 25 CVEs   │  │
+│  │ dedup +  │  │ conf-   │  │ keyword   │  │
+│  │ corrobor │  │ weighted│  │ fallback  │  │
+│  └──────────┘  └─────────┘  └───────────┘  │
+└─────────────────────────────────────────────┘
+         │              │             │
+         ▼              ▼             ▼
+   [Subprocess]   [SQLite DBs]  [Artifacts]
+   nmap, nuclei   jobs.db       scan outputs
+   gobuster, etc  vault.db      screenshots
+                  engage.db     pcap files
+```
+
+**The execution flow for every tool call:**
+
+1. Scope check — target validated against allowlist (thread-safe, CIDR/wildcard support)
+2. Input validation — nmap targets validated against allowlist regex before subprocess
+3. Rate gate — per-tool async lock enforces configured requests/sec
+4. Subprocess — runs in its own session (setsid), process group killed on timeout/cancel
+5. Retry — transient failures (timeout, crash) retry up to 2× with exponential backoff
+6. Extraction — raw output parsed by per-tool extractor into structured finding dicts
+7. Verification — web path findings actively re-checked against soft-404 baseline
+8. Deduplication — same finding from multiple tools merged, confidence boosted
+9. Tagging — findings written to engagement DB (fast path, single indexed query)
+10. Webhook — high/critical findings fire HTTP notification (Slack/Discord/custom)
 
 ---
 
-## Architecture
+## What Makes It Different
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     MCP Client (Claude)                      │
-└──────────────────────────────┬──────────────────────────────┘
-                               │ stdio transport
-                               ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    FastMCP Server (server.py)                │
-├────────────┬────────────┬────────────┬──────────────────────┤
-│  Job Mgr   │   Scope    │   Creds    │   Engagement Mgr     │
-│  (async)   │  (allow)   │   Vault    │   (named scopes)     │
-├────────────┴────────────┴────────────┴──────────────────────┤
-│                    Tool Modules Layer                        │
-├────────────┬────────────┬────────────┬──────────────────────┤
-│ Recon      │ Scanning   │ Vuln       │ Exploitation         │
-│ nmap       │ gobuster   │ nuclei     │ sqlmap               │
-│ subfinder  │ nikto      │ wpscan     │ hydra                │
-│ amass      │ ffuf       │ searchsploit│ metasploit          │
-│ dig/whois  │ enum4linux │ cve_exploit│ ssh_tools            │
-│ harvester  │ smbclient  │            │ netcat               │
-├────────────┼────────────┼────────────┼──────────────────────┤
-│ Web        │ Reporting  │ Utils      │                      │
-│ http_req   │ reports    │ health     │                      │
-│ crawler    │ pcap_parse │ findings   │                      │
-│ screenshot │            │ suggest    │                      │
-└────────────┴────────────┴────────────┴──────────────────────┘
-       │              │              │
-       ▼              ▼              ▼
-  [Subprocess]   [SQLite DBs]   [Artifacts Dir]
-  nmap, nuclei   jobs.db        scan outputs
-  gobuster, etc  vault.db       screenshots
-                 engagements.db pcap files
-```
+**vs. running tools manually**
+
+Every tool result is immediately structured. No regex on raw output. No copy-pasting between tools. No forgetting what you found 3 scans ago. The AI sees findings, not terminal dumps.
+
+**vs. other pentest MCP servers**
+
+Most MCP pentest tools wrap tool execution and return raw stdout. kali-mcp goes further:
+
+| Feature | Raw wrapper | kali-mcp |
+|---|---|---|
+| Structured findings | ❌ | ✅ 21 extractors |
+| False positive filtering | ❌ | ✅ Soft-404 + nikto noise |
+| Cross-tool corroboration | ❌ | ✅ Confidence boost |
+| Attack chain narratives | ❌ | ✅ 7 templates, confidence-weighted |
+| CVE-specific remediation | ❌ | ✅ 25 CVEs, specific patch versions |
+| Engagement lifecycle | ❌ | ✅ Full DB-backed workflow |
+| Retry on failure | ❌ | ✅ 2× with backoff |
+| Rate limiting | ❌ | ✅ Per-tool async lock |
+| Input validation | ❌ | ✅ Allowlist regex |
+| Encrypted credential vault | ❌ | ✅ Fernet AES-128 |
+
+**vs. commercial platforms**
+
+No subscription, no cloud, no data leaves your machine. Runs entirely on your Kali box. The LLM is the UI — no dashboards to learn, no UI to click through.
 
 ---
 
 ## Requirements
 
-### System Dependencies
+### Python
 
-| Tool | Install Command | Purpose |
-|------|----------------|---------|
-| nmap | `apt install nmap` | Port scanning & service detection |
-| gobuster | `apt install gobuster` | Directory & subdomain brute-force |
-| nikto | `apt install nikto` | Web server vulnerability scanning |
-| nuclei | `apt install nuclei` | Template-based vulnerability scanning |
-| sqlmap | `apt install sqlmap` | SQL injection detection & exploitation |
-| hydra | `apt install hydra` | Password brute-force |
-| ffuf | `apt install ffuf` | Web fuzzer |
-| subfinder | `apt install subfinder` | Passive subdomain enumeration |
-| amass | `apt install amass` | In-depth subdomain enumeration |
-| theHarvester | `apt install theharvester` | OSINT gathering |
-| wpscan | `apt install wpscan` | WordPress vulnerability scanning |
-| enum4linux | `apt install enum4linux` | SMB/NetBIOS enumeration |
-| smbclient | `apt install smbclient` | SMB share listing |
-| searchsploit | `apt install exploitdb` | Exploit database search |
-| metasploit | `apt install metasploit-framework` | Exploit framework |
-| netcat/ncat | `apt install netcat-openbsd` | Port checking & banner grabbing |
-| whois | `apt install whois` | WHOIS lookups |
-| dnsutils | `apt install dnsutils` | DNS queries (dig) |
-| tshark | `apt install tshark` | PCAP analysis |
-| gowitness | `go install github.com/sensepost/gowitness@latest` | Web screenshots |
-| masscan | `apt install masscan` | Fast port scanning (optional) |
-
-### Wordlists
-
-```bash
-apt install seclists
+```
+Python 3.11+
 ```
 
-Provides: `dirb/common.txt`, `seclists/Discovery/Web-Content/common.txt`, `seclists/Discovery/DNS/subdomains-top1million-5000.txt`, `rockyou.txt`
+### System Tools
 
-### Python 3.11+
+Install all at once on Kali:
 
 ```bash
-python3 --version  # Must be 3.11 or higher
+sudo apt install -y nmap gobuster nikto ffuf hydra sqlmap \
+  subfinder amass theharvester wpscan enum4linux smbclient \
+  searchsploit netcat-openbsd whois dnsutils tshark \
+  metasploit-framework masscan seclists
+
+# gowitness (screenshots) — go required
+go install github.com/sensepost/gowitness@latest
+```
+
+Minimum required (everything else degrades gracefully):
+
+```bash
+sudo apt install -y nmap gobuster nikto nuclei ffuf hydra sqlmap
+```
+
+### Python Dependencies
+
+```
+mcp[cli]>=1.27.2    aiosqlite>=0.22.1   httpx>=0.28.1
+paramiko>=5.0.0     cryptography        anyio>=4.13.0
 ```
 
 ---
 
 ## Installation
 
-### 1. Clone the Repository
-
 ```bash
+# 1. Clone
 git clone https://github.com/Neeraj829784/kali-mcp.git
 cd kali-mcp
-```
 
-### 2. Create Virtual Environment
-
-```bash
+# 2. Virtual environment
 python3 -m venv venv
 source venv/bin/activate
-```
 
-### 3. Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-Or with optional dev dependencies:
-
-```bash
+# 3. Install
 pip install -e ".[dev]"
+
+# 4. Verify
+python3 -c "from server import mcp; print('Ready')"
 ```
 
-### 4. Verify Installation
+**One-command installer (Kali/Debian/Ubuntu):**
 
 ```bash
-python3 -c "from server import mcp; print('MCP server ready')"
-```
-
-### 5. Run Health Check
-
-```bash
-python3 server.py  # Server starts — use MCP client to call server_health tool
-```
-
-Or manually check binaries:
-
-```bash
-python3 -c "
-import shutil
-tools = ['nmap', 'gobuster', 'nikto', 'nuclei', 'sqlmap', 'hydra', 'ffuf', 'subfinder', 'amass', 'theHarvester', 'wpscan', 'enum4linux', 'smbclient', 'searchsploit', 'whois', 'dig', 'tshark']
-for t in tools:
-    status = '✓' if shutil.which(t) else '✗'
-    print(f'{status} {t}')
-"
+curl -fsSL https://raw.githubusercontent.com/Neeraj829784/kali-mcp/main/install.sh | sudo bash
 ```
 
 ---
 
 ## Quick Start
 
-### Connect to Claude Desktop
+### 1. Connect to your AI client
 
-The `claude_desktop_config.json` file is pre-configured. Point Claude Desktop to it:
+**Claude Desktop** — edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
@@ -211,171 +210,368 @@ The `claude_desktop_config.json` file is pre-configured. Point Claude Desktop to
 }
 ```
 
-### Basic Usage Flow
+**Kiro / other MCP clients** — point to `server.py` with the venv Python.
+
+### 2. Run a preflight check
 
 ```
-1. Start an engagement:
-   → engagement_start(name="ClientX-WebApp-2026", scope=["192.168.1.0/24", "example.com"])
+→ server_health()
+```
 
-2. Run a parallel host scan:
-   → scan_host(target="192.168.1.10", intensity="normal")
+Verifies all binaries, Python deps, and wordlists before your first scan.
 
-3. Check findings:
-   → analyze_findings(host="192.168.1.10", min_severity="high")
+### 3. Start an engagement
 
-4. Follow suggestions:
-   → The system auto-suggests next steps based on what was found
+```
+→ engagement_start(
+    name="ClientX-WebApp-2026",
+    scope=["10.10.10.0/24", "example.com"],
+    client="ClientX Ltd"
+  )
+```
 
-5. Generate a report:
-   → generate_report(job_ids=["abc123", "def456"], title="ClientX Assessment")
+All subsequent tool calls automatically check scope and tag findings.
 
-6. End the engagement:
-   → engagement_end()
+### 4. Scan
+
+```
+→ scan_host(target="10.10.10.5", intensity="normal")
+→ scan_web(url="http://10.10.10.5", depth="normal")
+```
+
+### 5. Triage
+
+```
+→ analyze_findings(min_severity="medium")
+→ analyze_attack_chains()
+```
+
+### 6. Report
+
+```
+→ generate_pentest_report(format="html", save_to="artifacts/report.html")
+```
+
+### 7. Close
+
+```
+→ engagement_end()
 ```
 
 ---
 
-## Tool Catalog
+## Tool Reference
 
-### Reconnaissance
+### Reconnaissance (12 tools)
 
-| Tool | Description |
-|------|-------------|
-| `nmap_host_discovery(targets)` | Ping scan to discover live hosts (-sn) |
-| `nmap_port_scan(targets, ports, scan_type, timing)` | Port scan with SYN/TCP/UDP options |
-| `nmap_service_detection(targets, ports, version_intensity)` | Detect service versions (-sV) |
-| `nmap_os_detection(targets)` | OS fingerprinting (-O) |
+| Tool | What it does |
+|---|---|
+| `nmap_host_discovery(targets)` | Ping scan — live host discovery |
+| `nmap_port_scan(targets, ports, scan_type, timing, wait)` | TCP/SYN/UDP port scan — returns job_id or blocks with `wait=True` |
+| `nmap_service_detection(targets, ports, version_intensity)` | Service version detection `-sV` |
+| `nmap_os_detection(targets)` | OS fingerprinting `-O`, auto-sudo if not root |
 | `nmap_vuln_scan(targets, ports, scripts)` | NSE vulnerability scripts |
-| `nmap_aggressive_scan(targets, ports)` | Full aggressive scan (-A) |
+| `nmap_aggressive_scan(targets, ports)` | Full `-A` scan: OS + version + scripts + traceroute |
+| `nmap_xml_scan(targets, ports, scan_type, timing, service_detection)` | Structured XML output — returns parsed host/port/service dicts |
 | `subfinder_enumerate(domain, all_sources, threads)` | Passive subdomain enumeration |
-| `amass_enum(domain, passive, brute_force)` | OWASP Amass subdomain discovery |
-| `theharvester_search(domain, source, limit)` | OSINT: emails, subdomains, IPs |
+| `amass_enum(domain, passive, brute_force, timeout_mins)` | OWASP Amass deep subdomain discovery |
+| `theharvester_search(domain, source, limit, dns_resolve)` | OSINT: emails, subdomains, IPs |
 | `whois_lookup(target)` | WHOIS registration data |
-| `dig_lookup(domain, record_type, dns_server)` | DNS record queries |
+| `dig_lookup(domain, record_type, dns_server, short)` | DNS record queries |
 | `dig_zone_transfer(domain, nameserver)` | DNS zone transfer attempt (AXFR) |
 
-### Scanning
+> All nmap tools validate target tokens against an allowlist regex — `--script=evil` and `/etc/passwd` style injection is blocked before subprocess execution.
 
-| Tool | Description |
-|------|-------------|
-| `gobuster_dir(url, wordlist, extensions)` | Directory/file brute-force |
-| `gobuster_dns(domain, wordlist)` | DNS subdomain brute-force |
-| `gobuster_vhost(url, wordlist)` | Virtual host discovery |
-| `nikto_scan(target, port, ssl)` | Web server vulnerability scan |
-| `ffuf_fuzz(url, wordlist, keyword, method)` | Web endpoint fuzzer |
-| `enum4linux_scan(target, username, password)` | SMB/NetBIOS enumeration |
-| `smbclient_list_shares(target, username, password)` | List SMB shares |
-| `fast_port_scan(target, ports, rate)` | masscan + nmap two-phase scan |
+### Scanning (8 tools)
 
-### Vulnerability Assessment
+| Tool | What it does |
+|---|---|
+| `gobuster_dir(url, wordlist, extensions, threads, exclude_codes, follow_redirect)` | Directory/file brute-force |
+| `gobuster_dns(domain, wordlist, show_ips, threads)` | DNS subdomain brute-force |
+| `gobuster_vhost(url, wordlist, append_domain, threads)` | Virtual host discovery |
+| `nikto_scan(target, port, ssl, max_time, timeout)` | Web server vulnerability scan |
+| `ffuf_fuzz(url, wordlist, keyword, match_codes, filter_codes, threads, data, method, headers, auto_calibrate)` | Web endpoint fuzzer |
+| `enum4linux_scan(target, username, password)` | Full SMB/NetBIOS enumeration |
+| `smbclient_list_shares(target, username, password, port)` | List accessible SMB shares |
+| `fast_port_scan(target, ports, rate, service_detection)` | masscan discovery + targeted nmap `-sV` |
 
-| Tool | Description |
-|------|-------------|
-| `nuclei_scan(target, templates, severity, tags)` | Template-based vuln scanning |
-| `nuclei_update_templates()` | Update Nuclei template database |
-| `wpscan_scan(url, enumerate, api_token)` | WordPress vulnerability scan |
-| `searchsploit_search(query, cve, exact)` | Exploit-DB local search |
+### Vulnerability Assessment (6 tools)
+
+| Tool | What it does |
+|---|---|
+| `nuclei_scan(target, templates, severity, tags, rate_limit, concurrency, auto_scan)` | Template-based vulnerability scanning |
+| `nuclei_update_templates()` | Pull latest Nuclei template database |
+| `wpscan_scan(url, enumerate, api_token, detection_mode, random_user_agent)` | WordPress vulnerability scan |
+| `searchsploit_search(query, cve, exact, title_only, exclude)` | Local Exploit-DB search |
 | `searchsploit_get_path(edb_id)` | Get exploit file path by EDB-ID |
-| `cve_to_exploit(service, version, banner)` | Find exploits for a service version |
-| `scan_and_exploit_chain(target, ports)` | Full scan → detect → exploit chain |
+| `cve_to_exploit(service, version, banner, os_type)` | Given a service version → find searchsploit + MSF exploits |
+| `scan_and_exploit_chain(target, ports)` | Full chain: port scan → version detect → CVE lookup per service |
 
-### Exploitation
+### Exploitation (9 tools)
 
-| Tool | Description |
-|------|-------------|
-| `sqlmap_scan(url, data, level, risk, dbms)` | SQL injection detection & exploitation |
-| `hydra_bruteforce(target, service, username, passlist)` | Password brute-force |
-| `msf_search(query)` | Search Metasploit modules |
-| `msf_run_module(module, options, payload)` | Run a Metasploit module non-interactively |
-| `msfvenom_generate(payload, lhost, lport, format)` | Generate payloads |
-| `ssh_exec(host, username, password/key_file, command)` | Execute commands via SSH |
-| `ssh_enum_privesc(host, username, password/key_file)` | Enumerate privilege escalation vectors |
-| `nc_port_check(host, ports)` | Quick port open/closed check |
-| `nc_banner_grab(host, port, send_data)` | Grab service banners |
+| Tool | What it does |
+|---|---|
+| `sqlmap_scan(url, data, level, risk, dbms, technique, enumerate_dbs, enumerate_tables, dump, database, table, cookie, random_agent)` | SQL injection detection and exploitation |
+| `hydra_bruteforce(target, service, username, userlist, password, passlist, port, tasks, stop_on_first)` | Multi-protocol password brute-force |
+| `msf_search(query)` | Search Metasploit module database |
+| `msf_run_module(module, options, payload)` | Run a Metasploit module non-interactively via resource file |
+| `msfvenom_generate(payload, lhost, lport, format, filename)` | Generate payloads — saved `chmod 600` to artifacts/ |
+| `ssh_exec(host, username, password, key_file, command, port, timeout)` | Execute commands via SSH (paramiko, no sshpass) |
+| `ssh_enum_privesc(host, username, password, key_file, port)` | Enumerate SUID/sudo/capabilities/cron privesc vectors |
+| `nc_port_check(host, ports)` | Quick TCP port open/closed check |
+| `nc_banner_grab(host, port, send_data, timeout)` | Grab raw service banners |
 
-### Web Testing
+### Web Testing (7 tools)
 
-| Tool | Description |
-|------|-------------|
-| `http_request(url, method, headers, cookies, data)` | Arbitrary HTTP requests with full response |
-| `html_to_text(html)` | Strip HTML tags, extract visible text |
-| `extract_links(html, base_url)` | Extract anchors, forms, scripts, images from HTML |
-| `http_form_submit(url, form_data, method)` | Submit HTML forms (simulates browser POST) |
-| `web_crawl(url, max_depth, max_pages)` | Organic web crawler for endpoint discovery |
-| `screenshot_url(url)` | Take screenshot of a single URL |
-| `screenshot_urls(urls, threads)` | Batch screenshots of multiple URLs |
+| Tool | What it does |
+|---|---|
+| `http_request(url, method, headers, cookies, data, follow_redirects, timeout, save_to, extract_text)` | Full HTTP request — status, headers, body, redirect chain, timing |
+| `html_to_text(html)` | Strip tags, return visible text |
+| `extract_links(html, base_url, only_same_origin)` | Extract anchors, forms, scripts, images from HTML |
+| `http_form_submit(url, form_data, method, headers, cookies, follow_redirects)` | Submit HTML forms |
+| `web_crawl(url, max_depth, max_pages, include_external, timeout)` | Organic crawler — discovers endpoints wordlists miss |
+| `screenshot_url(url, timeout)` | Single URL screenshot via gowitness |
+| `screenshot_urls(urls, threads, timeout)` | Batch screenshots for visual triage |
 
-### Reporting & Analysis
+### Analysis & Reporting (9 tools)
 
-| Tool | Description |
-|------|-------------|
-| `generate_report(job_ids, title, format)` | Markdown or JSON report from job results |
+| Tool | What it does |
+|---|---|
+| `generate_pentest_report(title, min_severity, min_confidence, host, save_to, format, confirmed_only)` | Professional report: exec summary + attack chains + findings + CVE remediation. Markdown or standalone HTML |
+| `generate_report(job_ids, title, format)` | Quick report from specific job IDs |
 | `list_completed_jobs(tool_filter)` | List finished jobs, optionally filtered |
 | `parse_nmap_output(job_id)` | Structured nmap XML parsing |
 | `parse_nuclei_output(findings_file)` | Structured Nuclei JSONL parsing |
-| `pcap_extract(pcap_path)` | Extract credentials & data from PCAP files |
-| `pcap_protocols(pcap_path)` | Protocol hierarchy & conversations in PCAP |
-| `tshark_query(pcap_path, display_filter, fields)` | Arbitrary tshark queries on PCAP |
-| `read_file(path, max_bytes, as_hex, as_base64)` | Safe file reading with magic byte detection |
-| `list_artifacts()` | List all files in the artifacts directory |
+| `pcap_extract(pcap_path)` | Extract credentials and key data from PCAP |
+| `pcap_protocols(pcap_path)` | Protocol hierarchy and conversation list |
+| `tshark_query(pcap_path, display_filter, fields, max_lines)` | Arbitrary tshark filter queries |
+| `read_file(path, max_bytes, offset, as_hex, as_base64)` | Safe file reading with magic byte detection |
+| `list_artifacts()` | List all files in artifacts directory |
 
-### Engagement Management
+### Engagement & Triage (16 tools)
 
-| Tool | Description |
-|------|-------------|
-| `engagement_start(name, scope, client, notes)` | Start a named engagement with authorized targets |
-| `engagement_status()` | Show active engagement and findings summary |
-| `engagement_findings(min_severity, host, limit)` | Get all findings for current engagement |
-| `engagement_end()` | Close engagement and clear scope |
-| `engagement_list()` | List all engagements (past and active) |
-| `creds_store(host, username, password, hash, service)` | Store discovered credentials |
-| `creds_list(host, service)` | List stored credentials with filters |
-| `creds_use(host, service)` | Get best credential for a host/service |
-| `creds_delete(cred_id)` | Delete a credential from vault |
-| `get_findings(job_id, host, min_severity)` | Extract normalized findings from job output |
-| `analyze_findings(host, min_severity, max_items)` | AI-assisted triage with attack paths & quick wins |
-| `server_health()` | Preflight check of all binaries, deps, and wordlists |
+| Tool | What it does |
+|---|---|
+| `engagement_start(name, scope, client, notes)` | Start engagement — sets scope automatically |
+| `engagement_status()` | Active engagement + findings summary |
+| `engagement_findings(min_severity, host, limit)` | All findings for current engagement |
+| `engagement_end()` | Close engagement, clear scope |
+| `engagement_list()` | All engagements, past and active |
+| `list_unconfirmed_findings(host, min_severity)` | Findings awaiting validation |
+| `update_finding_status(finding_id, status)` | Mark `confirmed` / `false_positive` / `unconfirmed` |
+| `analyze_findings(host, min_severity, min_confidence, max_items)` | AI triage: attack paths, quick wins, next steps |
+| `analyze_attack_chains(host, min_severity, min_confidence)` | Correlate findings into compound attack chains |
+| `get_findings(job_id, host, min_severity, min_confidence)` | Extract normalized findings from a job |
+| `creds_store(host, username, password, hash, service, port, source_tool, notes)` | Store credentials — encrypted at rest (Fernet) |
+| `creds_list(host, service)` | List credentials with decrypted passwords |
+| `creds_use(host, service)` | Best credential for a host/service |
+| `creds_delete(cred_id)` | Remove credential from vault |
+| `server_health()` | Preflight: binaries, Python deps, wordlists |
 | `check_binary(name)` | Check if a specific binary is installed |
+
+### Scope Management (5 tools)
+
+| Tool | What it does |
+|---|---|
+| `scope_list()` | Show current scope (empty = lab mode) |
+| `scope_add(target)` | Add IP, CIDR, domain, or wildcard |
+| `scope_set(targets)` | Replace entire scope |
+| `scope_remove(target)` | Remove one target |
+| `scope_clear()` | Reset to lab mode |
+
+### Job Management (4 tools)
+
+| Tool | What it does |
+|---|---|
+| `get_job_status(job_id)` | Status and result of an async job |
+| `get_job_output(job_id, tail)` | Partial output from running/completed job |
+| `list_jobs(limit)` | Recent jobs with statuses and retry counts |
+| `cancel_job(job_id)` | Kill a running job and its process group |
 
 ---
 
 ## Workflows
 
-### Parallel Host Scan (`scan_host`)
+### `scan_host` — Parallel Host Scan
 
-Fires multiple tools simultaneously based on detected services:
+Fires multiple tools simultaneously based on detected services. Reduces total recon time by 70%+ vs sequential scanning.
 
 ```
-scan_host(target="192.168.1.10", intensity="normal")
+scan_host(target="10.10.10.5", intensity="normal")
 
-Phase 1: nmap port scan (must complete first)
-Phase 2 (parallel based on findings):
-  └─ Web detected → nikto + gobuster + nuclei simultaneously
-  └─ SMB detected → enum4linux + nmap vuln scan simultaneously
-  └─ SSH detected → service version detection
+Phase 1:  nmap port scan (completes first)
+          ↓ detects open services
+Phase 2:  [parallel]
+          Web found  → nikto + gobuster + nuclei
+          SMB found  → enum4linux + nmap smb vuln scripts
+          SSH found  → service version banner
 ```
 
 **Intensity levels:**
-- `light` — Top 100 ports, T5 timing, no follow-up scans (~1 min)
-- `normal` — Ports 1-10000, T4 timing, targeted scans (~5 min)
-- `deep` — Full port range 1-65535, T3 timing, comprehensive scans (~30 min)
 
-### Parallel Web Scan (`scan_web`)
+| Level | Ports | Timing | Phase 1 method | Time |
+|---|---|---|---|---|
+| `light` | top 100 | T5 | nmap | ~1 min |
+| `normal` | 1-10000 | T4 | nmap | ~5 min |
+| `deep` | 1-65535 | T3 | masscan → nmap | ~15 min |
+
+> `deep` uses masscan at configurable PPS (1000/5000/10000 by intensity level) for fast port discovery, then targeted nmap `-sV` only on confirmed open ports. Falls back to nmap-only if masscan is not installed.
+
+### `scan_web` — Parallel Web Scan
 
 ```
-scan_web(url="http://example.com", depth="normal")
+scan_web(url="http://10.10.10.5", depth="normal")
 
 Runs simultaneously: nikto, gobuster, nuclei, web crawler
-Returns consolidated findings from all scanners
+After crawl: gowitness screenshots of interesting URLs
+Returns: consolidated findings from all scanners + screenshot paths
 ```
 
-### MCP Prompts (Reusable Workflow Templates)
+### MCP Prompts — Built-in Workflow Templates
 
-Three built-in prompts that generate step-by-step instructions for the AI:
+Three reusable prompts that give the AI a complete step-by-step plan:
 
-- `recon_domain(domain)` — Full reconnaissance: whois → DNS → subfinder → theharvester → amass → report
-- `web_pentest(url)` — Web app testing: nmap → nikto → gobuster → ffuf → nuclei → wpscan → sqlmap → report
-- `smb_enum(target)` — SMB enumeration: nmap → smbclient → enum4linux → vuln scan → report
+**`recon_domain(domain)`** — Full domain recon
+```
+whois → dig (A/NS/MX/TXT) → subfinder → theharvester → amass → report
+```
+
+**`web_pentest(url)`** — Web application pentest
+```
+nmap → nikto → gobuster → gobuster_vhost → ffuf → nuclei
+→ wpscan (if WordPress) → sqlmap (if login forms) → report
+```
+
+**`smb_enum(target)`** — Windows/Samba enumeration
+```
+nmap (135/139/445) → smbclient (anonymous) → enum4linux → nmap smb vuln scripts
+```
+
+---
+
+## Finding Pipeline
+
+Every tool result flows through this pipeline before the AI ever sees it:
+
+```
+Raw output
+    │
+    ▼ Per-tool extractor (21 tools)
+Structured finding: {host, port, service, title, severity, confidence, evidence, tool}
+    │
+    ▼ Soft-404 / wildcard verification (gobuster, ffuf paths only)
+    │  → Random baseline request establishes wildcard fingerprint
+    │  → Paths matching baseline dropped as false positives
+    │  → Distinct responses promoted to high confidence
+    │
+    ▼ Deduplication keyed on (host, port, normalized_title)
+    │  → Highest severity kept
+    │  → Longest evidence kept
+    │  → 2+ distinct tools agreeing → confidence bumped one level
+    │
+    ▼ Engagement tagging (async, single DB write)
+    │
+    ▼ Webhook notification (high/critical, fire-and-forget)
+```
+
+### Confidence Levels
+
+| Level | Meaning | Examples |
+|---|---|---|
+| `high` | Tool actively confirmed | nmap open port, hydra valid creds, sqlmap injectable, MSF session opened |
+| `medium` | Template/script matched | nuclei template, wpscan vuln, nmap NSE script |
+| `low` | Pattern guess | gobuster path, nikto header finding, ffuf endpoint |
+
+### Extractors by Tool
+
+| Tool | What gets extracted |
+|---|---|
+| `nmap` | Open ports, service versions, NSE vuln findings |
+| `nmap_os_detection` | OS name/version with confidence level |
+| `nuclei` | JSONL findings with severity from template metadata |
+| `nikto` | High-signal findings only (XSS, SQLi, RCE) — header noise filtered |
+| `gobuster_dir/vhost` | Discovered paths with HTTP status |
+| `gobuster_dns` | Discovered subdomains (strips IP brackets) |
+| `sqlmap` | Injectable parameters, enumerated databases |
+| `hydra` | Valid credentials with port/service |
+| `searchsploit` | Matching exploits from local ExploitDB |
+| `nuclei` | Template matches with severity |
+| `wpscan` | Vulnerable plugins with CVSS score |
+| `enum4linux` | SMB users, shares, null sessions |
+| `theharvester` | Emails, subdomains with IPs |
+| `subfinder / amass` | Discovered subdomains |
+| `ssh_enum_privesc` | SUID binaries, sudo NOPASSWD, Linux capabilities |
+| `msf_run_module` | **Meterpreter/shell sessions (CRITICAL)**, loot, `[+]` success lines |
+| `ffuf` | Discovered endpoints from JSON or plain text output |
+
+---
+
+## Attack Chain Engine
+
+The chain engine correlates individual findings into compound-impact narratives. 7 templates with confidence-weighted signals.
+
+### How signals work
+
+Each signal (e.g. `creds`, `sqli`, `ssh_open`) uses **authoritative tool matching** before keyword matching:
+
+- **Authoritative tool** (hydra, sqlmap, cve_to_exploit) → signal always fires, regardless of confidence
+- **Keyword match + medium+ confidence** → signal fires (scanner confirmed)
+- **Keyword match + low confidence** → signal does NOT fire (Nikto noise ignored)
+
+This prevents "password field detected by Nikto" from triggering a credential lateral movement chain in your client report.
+
+### Chain Templates
+
+| Chain | Signals Required | Escalation |
+|---|---|---|
+| SQL Injection → Credential Theft → System Access | `sqli` + `ssh_open` | +1 severity |
+| Exposed Sensitive File → Authenticated Access | `info_disclosure` + `admin_panel` | +2 severity |
+| Admin Panel + Weak Credentials → Privileged Access | `admin_panel` + `creds` | +1 severity |
+| Recovered Credentials → Lateral Movement | `creds` + `ssh_open` | +1 severity |
+| Unauthenticated SMB RCE (EternalBlue) | `smb_vuln` | +0 (already critical) |
+| File Upload → Remote Code Execution | `admin_panel` + `file_upload` | +2 severity |
+| Outdated Service + Public Exploit → Compromise | `open_port` + `exploit_available` | +1 severity |
+
+Each chain includes a human-readable narrative explaining the compound impact — ready to paste into a client report.
+
+---
+
+## Engagement System
+
+The engagement system provides a complete professional pentest workflow:
+
+```python
+# Start — sets scope automatically on all tools
+engagement_start(name="ACME-WebApp-2026", scope=["10.10.10.0/24"])
+
+# All scans run here — findings auto-tagged to engagement
+
+# Triage — reads from engagement DB (O(1) query, not O(n) job rescan)
+analyze_findings(min_severity="medium")
+
+# Validate findings — optional zero-FP workflow
+list_unconfirmed_findings()
+update_finding_status(finding_id=42, status="confirmed")
+update_finding_status(finding_id=43, status="false_positive")
+
+# Report — confirmed_only=True for zero-FP client delivery
+generate_pentest_report(
+    format="html",
+    confirmed_only=True,
+    save_to="artifacts/ACME-report.html"
+)
+
+# Close
+engagement_end()
+```
+
+### What the report includes
+
+- Executive summary with host/finding counts and risk rating
+- Attack chains section with compound-impact narratives
+- Findings grouped by severity (critical → info)
+- Per-finding: host, tool, evidence, CVE-specific remediation
+- Scan coverage appendix: tools used, job count, timestamp
 
 ---
 
@@ -383,138 +579,117 @@ Three built-in prompts that generate step-by-step instructions for the AI:
 
 ### Scope Enforcement
 
-All tools check `scope.txt` before execution:
-
-- **Empty scope file** → Lab mode (all targets allowed)
-- **Populated scope file** → Restricted mode (only listed IPs/CIDRs/domains allowed)
-- Wildcard support: `*.example.com` matches all subdomains
-- CIDR support: `192.168.1.0/24` matches all IPs in range
-
-### File Access Restrictions
-
-The `read_file` tool only allows access to:
-- `artifacts/` directory
-- `/tmp` and `/var/tmp`
-- `/usr/share/wordlists` and `/usr/share/seclists`
-
-Blocked patterns: `id_rsa`, `.pem`, `.key`, `shadow`, `.ssh/`, `.env`, `.bash_history`, `credentials`, `.aws/`
-
-### Audit Logging
-
-Every tool call is logged to `audit.log`:
+Every tool call validates the target before execution. The scope cache is protected by a `threading.Lock` — safe under parallel tool execution.
 
 ```
-2026-06-12 14:32:10,123 scope_add target=192.168.1.0/24
-2026-06-12 14:32:15,456 get_job_status job_id=a1b2c3d4
-2026-06-12 14:33:00,789 cancel_job job_id=e5f6g7h8
+scope.txt (empty) = lab mode — all targets allowed
+scope.txt (populated) = restricted mode
+
+Supported formats:
+  10.0.0.1          exact IP
+  192.168.1.0/24    CIDR range
+  example.com       exact domain
+  *.example.com     wildcard subdomain
 ```
+
+### Input Validation
+
+All nmap tools run target tokens through an allowlist regex before building the subprocess command. Blocks:
+
+```
+--script=evil     → flag injection
+/etc/passwd       → path traversal
+10.0.0.1;id       → command injection
+```
+
+Allows: IPs, CIDRs (`x.x.x.x/n`), hostnames, ranges (`x-y`), wildcards.
 
 ### Credential Vault
 
-- SQLite database with no encryption at rest
-- Store only what you need for the engagement
-- Clear with `creds_delete()` when done
-- Vault is excluded from git by default (add `-f` to override)
+```
+Encryption:  Fernet (AES-128-CBC + HMAC)
+Key source:  KALI_MCP_VAULT_KEY env var, or vault.key (0600)
+Storage:     vault.db (git-ignored)
+Thread safety: double-checked locking on key init
+```
+
+### File Access
+
+All report save paths are validated against an allowlist:
+- `artifacts/` (created `0700`)
+- `/tmp`, `/var/tmp`
+
+Path traversal (`../../../etc/passwd`) is blocked at `safe_save_path()`.
+
+### Secrets in Git
+
+The following are always git-ignored:
+
+```
+vault.key, vault.db, jobs.db, engagements.db
+audit.log, scope.txt, artifacts/
+```
+
+### Audit Trail
+
+Every tool call is written to `audit.log`:
+
+```
+2026-06-15 14:32:10 scope_add target=10.10.10.0/24
+2026-06-15 14:32:15 get_job_status job_id=a1b2c3d4
+```
 
 ---
 
 ## Configuration
 
-Edit `config.py` to customize:
+All tunable parameters live in `config.py`:
 
 ```python
-# Timeouts per tool (seconds)
+# Per-tool timeouts (seconds)
 TOOL_TIMEOUTS = {
-    "nmap_port_scan": 1800,    # 30 min for large ranges
-    "sqlmap": 2400,            # 40 min for deep injection testing
-    "default": 120,            # 2 min default
+    "nmap_port_scan":      1800,  # 30 min for full port range
+    "sqlmap":              2400,  # 40 min for deep injection
+    "hydra":               1800,  # 30 min brute-force
+    "nuclei":               900,
+    "default":              120,
 }
 
-# Rate limits (requests/sec, 0 = no limit)
+# Per-tool rate limits (req/sec, 0 = no limit)
 RATE_LIMITS = {
-    "nuclei": 150,
-    "ffuf": 40,
+    "nuclei":    150,
+    "ffuf":       40,
     "gobuster_dir": 10,
-    "hydra": 16,
+    "hydra":      16,
+    "masscan":  5000,   # pps, handled separately
 }
 
-# Wordlist fallback paths
-WORDLISTS = {
-    "dirb_common": (
-        "/usr/share/wordlists/dirb/common.txt",
-        "/usr/share/seclists/Discovery/Web-Content/common.txt",
-    ),
-    "dns_subdomains": (
-        "/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt",
-    ),
+# masscan packets-per-second by intensity
+MASSCAN_RATE = {
+    "light":   1000,   # stealthy — VPN/remote targets
+    "normal":  5000,   # balanced default
+    "deep":   10000,   # fast — LAN only
 }
 ```
 
 ---
 
-## Testing
+## Webhook Notifications
+
+Get notified when a critical finding lands — Slack, Discord, or any HTTP endpoint.
 
 ```bash
-# Run fast tests (excludes slow and live tests)
-pytest
-
-# Run all tests including slow ones
-pytest -m slow
-
-# Run tests requiring a live target (HTB/DVWA)
-pytest -m live
-
-# Run with coverage
-pytest --cov=. --cov-report=term-missing
+# Enable in environment
+export KALI_MCP_WEBHOOK_URL="https://hooks.slack.com/services/XXX/YYY/ZZZ"
+export KALI_MCP_WEBHOOK_MIN_SEVERITY="high"   # default: critical
 ```
 
-Test categories:
-- `test_core.py` — Core modules (job manager, scope, findings)
-- `test_tier1.py` — Tier 1 tool tests (fast, no network)
-- `test_tier2.py` — Tier 2 tool tests (moderate, network)
-- `test_tier3.py` — Tier 3 tool tests (slow, full scans)
-- `test_tools_*.py` — Per-category tool tests
+Auto-detects payload format:
+- **Slack** — `text` + `attachments` with colour-coded severity
+- **Discord** — `embeds` with hex colour codes
+- **Generic** — flat JSON for Teams, custom endpoints
 
----
-
-## Systemd Service
-
-For running as a persistent service:
-
-```bash
-# Edit paths in kali-mcp.service if needed
-sudo cp kali-mcp.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable kali-mcp
-sudo systemctl start kali-mcp
-sudo systemctl status kali-mcp
-```
-
-Service configuration:
-- Runs as user `neeraj`
-- Working directory: `/home/neeraj/kali-mcp`
-- Auto-restarts on failure with 5s delay
-- Logs to journal (`journalctl -u kali-mcp -f`)
-
----
-
-## Claude Desktop Integration
-
-The `claude_desktop_config.json` file is pre-configured for Claude Desktop MCP integration:
-
-```json
-{
-  "mcpServers": {
-    "kali-mcp": {
-      "command": "/home/neeraj/kali-mcp/venv/bin/python",
-      "args": ["/home/neeraj/kali-mcp/server.py"],
-      "env": {}
-    }
-  }
-}
-```
-
-Update the paths to match your installation, then restart Claude Desktop.
+Fire-and-forget — never blocks the scan pipeline.
 
 ---
 
@@ -522,88 +697,171 @@ Update the paths to match your installation, then restart Claude Desktop.
 
 ```
 kali-mcp/
-├── server.py              # FastMCP server entry point (28+ tools)
-├── config.py              # Timeouts, rate limits, wordlist paths
-├── job_manager.py         # Async job queue with SQLite backend
-├── scope.py               # Target allowlist enforcement
-├── cred_vault.py          # Credential storage & retrieval
-├── findings.py            # Finding extraction & normalization
-├── suggest.py             # Auto-suggest next steps
-├── triage.py              # AI-assisted finding analysis
-├── engagement.py          # Named engagement management
-├── workflow.py            # Parallel scan workflows
-├── parsers.py             # Structured output parsers (nmap XML, nuclei JSONL)
-├── health.py              # Binary & dependency health checks
-├── pyproject.toml         # Python project config
-├── requirements.txt       # Python dependencies
-├── pytest.ini             # Test configuration
-├── kali-mcp.service       # Systemd service file
-├── claude_desktop_config.json  # MCP client configuration
+├── server.py              # MCP server entry point — registers all 81 tools
+├── config.py              # Timeouts, rate limits, masscan PPS, wordlists, webhook
+├── job_manager.py         # Async job queue — retry, rate gate, finding extraction
+├── scope.py               # Target allowlist (thread-safe cache)
+├── engagement.py          # Named engagement lifecycle (aiosqlite)
+├── findings.py            # 21 per-tool extractors + dedup + soft-404 verification
+├── chains.py              # Attack chain engine — 7 templates, confidence-weighted
+├── remediation.py         # CVE-specific + keyword remediation lookup (25 CVEs)
+├── triage.py              # AI triage — fast path from engagement DB
+├── workflow.py            # Parallel scan workflows (scan_host, scan_web)
+├── suggest.py             # Auto-suggest next steps after tool completion
+├── webhook.py             # Slack/Discord/generic finding notifications
+├── cred_vault.py          # Fernet-encrypted credential storage
+├── health.py              # Binary + dependency preflight checks
+├── parsers.py             # Structured parsers (nmap XML, nuclei JSONL)
+│
 ├── tools/
-│   ├── base.py            # ToolExecutor (subprocess runner with process groups)
-│   ├── file_tools.py      # File inspection with path restrictions
-│   ├── reconnaissance/    # nmap, subfinder, amass, theharvester, whois, dig
-│   ├── scanning/          # gobuster, nikto, ffuf, enum4linux, smbclient, fast_port_scan
-│   ├── vulnerability/     # nuclei, wpscan, searchsploit, cve_to_exploit
-│   ├── exploitation/      # sqlmap, hydra, metasploit, ssh_tools, netcat
-│   ├── web/               # http_request, web_crawler, screenshot
-│   └── reporting/         # report_generator, pcap_parser
-├── tests/                 # pytest test suite
-├── artifacts/             # Scan outputs, screenshots, payloads (git-ignored)
-├── *.db                   # SQLite databases (git-ignored by default)
-└── audit.log              # Tool call audit trail (git-ignored)
+│   ├── base.py                    # ToolExecutor + rate gate + safe_save_path
+│   ├── file_tools.py
+│   ├── reconnaissance/
+│   │   ├── nmap.py                # 7 nmap tools + _validate_targets()
+│   │   ├── subfinder.py
+│   │   ├── amass.py
+│   │   ├── theharvester.py
+│   │   ├── whois_tool.py
+│   │   └── dig_tool.py
+│   ├── scanning/
+│   │   ├── gobuster.py
+│   │   ├── nikto.py
+│   │   ├── ffuf.py
+│   │   ├── enum4linux.py
+│   │   ├── smbclient_tool.py
+│   │   └── fast_port_scan.py
+│   ├── vulnerability/
+│   │   ├── nuclei.py
+│   │   ├── wpscan.py
+│   │   ├── searchsploit.py
+│   │   └── cve_to_exploit.py
+│   ├── exploitation/
+│   │   ├── sqlmap.py
+│   │   ├── hydra.py
+│   │   ├── metasploit.py          # RC file injection protection
+│   │   ├── ssh_tools.py           # paramiko, WarningPolicy
+│   │   └── netcat.py
+│   ├── web/
+│   │   ├── web_tools.py
+│   │   ├── web_crawler.py
+│   │   └── screenshot.py
+│   └── reporting/
+│       ├── report_generator.py    # HTML/Markdown report with CVE remediation
+│       └── pcap_parser.py
+│
+├── tests/                         # 145 tests across 22 files
+├── .github/workflows/test.yml     # CI — runs all non-integration tests on every PR
+├── artifacts/                     # git-ignored scan outputs, screenshots, payloads
+├── audit.log                      # git-ignored tool call log
+├── kali-mcp.service               # systemd unit file
+├── install.sh                     # One-command Kali/Debian/Ubuntu installer
+└── pyproject.toml
 ```
+
+---
+
+## Testing
+
+```bash
+# Fast tests — runs in ~5 seconds
+pytest
+
+# With verbose output
+pytest -v
+
+# Specific area
+pytest tests/test_chains.py
+pytest tests/test_findings.py
+pytest tests/test_suggest.py
+
+# All tests including slow integration
+pytest -m "slow or live"
+```
+
+**Test coverage by area:**
+
+| File | What it covers |
+|---|---|
+| `test_core.py` | JobManager, ToolExecutor, scope |
+| `test_findings.py` | All 21 extractors, dedup, soft-404 |
+| `test_chains.py` | Chain templates, confidence-weighted signals |
+| `test_suggest.py` | Auto-suggest logic — all 8 tool branches |
+| `test_fixes_hp.py` | aiosqlite, triage fast path, rate limiting |
+| `test_fixes_mp.py` | Retry, scope thread safety, CVE remediation, chains |
+| `test_fixes_lp.py` | nmap XML, masscan, webhooks, screenshots |
+| `test_fixes_missing.py` | OS/MSF extractors, masscan rate, input validation |
+| `test_coverage_gaps.py` | Parsers, vault, engagement lifecycle, gobuster_dns |
+| `test_report.py` | Report generation, HTML output, attack chains in reports |
+
+---
+
+## Deployment
+
+### Systemd Service
+
+```bash
+sudo cp kali-mcp.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now kali-mcp
+journalctl -u kali-mcp -f
+```
+
+The service file runs as `neeraj` with the project venv. Edit paths in `kali-mcp.service` if your username or install path differs.
+
+### Environment Variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `KALI_MCP_VAULT_KEY` | (from `vault.key`) | Credential vault encryption key |
+| `KALI_MCP_WEBHOOK_URL` | `""` | Webhook endpoint (empty = disabled) |
+| `KALI_MCP_WEBHOOK_MIN_SEVERITY` | `critical` | Minimum severity to notify |
 
 ---
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/new-tool`
-3. Add your tool in `tools/<category>/` following the `_register(mcp, job_mgr)` pattern
-4. Write tests in `tests/`
-5. Update this README with the new tool
-6. Submit a pull request
-
-### Adding a New Tool
+The pattern for adding a new tool is consistent across all 27 tool modules:
 
 ```python
-# tools/category/new_tool.py
+# tools/category/my_tool.py
 from config import TOOL_TIMEOUTS
 from scope import check_scope
 
 def _register(mcp, job_mgr):
+
     @mcp.tool()
-    async def new_tool_name(target: str) -> dict:
-        """Description of what this tool does."""
+    async def my_tool_name(target: str) -> dict:
+        """One-line description for the AI."""
         check_scope(target)
-        cmd = ["new-tool-binary", target]
-        return await job_mgr.run_and_wait("new_tool_name", cmd, TOOL_TIMEOUTS.get("default", 120))
+        cmd = ["my-binary", target]
+        return await job_mgr.run_and_wait(
+            "my_tool_name", cmd, TOOL_TIMEOUTS.get("default", 120)
+        )
 ```
 
-Then register it in `server.py`:
+Then in `server.py`:
 
 ```python
-from tools.category import new_tool
-# Add to the module list:
-for module in [..., new_tool, ...]:
-    module._register(mcp, job_mgr)
+from tools.category import my_tool
+# Add to the module registration list
 ```
+
+If the tool produces findings, add an extractor to `findings.py` and register it in `_EXTRACTORS`. Write tests. Open a PR — CodeRabbit reviews every PR automatically.
 
 ---
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) for full terms.
+MIT — see [LICENSE](LICENSE).
 
-**Authorized use only.** This tool is designed exclusively for systems you own or have explicit written authorization to test. Unauthorized use is illegal under the CFAA, Computer Misuse Act, and equivalent laws. You accept full responsibility for all use.
-
-The scope enforcement system is a safety aid, not a substitute for proper written authorization.
+**Authorized use only.** This tool is designed for systems you own or have explicit written authorization to test. Unauthorized scanning is illegal under the CFAA, Computer Misuse Act, and equivalent laws worldwide. The scope enforcement system is a safety aid, not a substitute for written authorization.
 
 ---
 
-## Author
+<div align="center">
 
-**Neeraj Vasupalli** — [GitHub](https://github.com/Neeraj829784)
+Built by [Neeraj Vasupalli](https://github.com/Neeraj829784)
 
-Built for AI-assisted penetration testing with Kali Linux and MCP protocol integration.
+*81 tools · 21 extractors · 25 CVEs · 7 attack chains · 145 tests · 21 PRs*
+
+</div>

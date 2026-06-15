@@ -32,7 +32,9 @@ async def mcp_server(job_mgr):
     from scope import clear_scope
     clear_scope()
     import server as srv
+    import engagement
     srv.job_mgr = job_mgr
+    await engagement.init_db()   # ensure engagement tables exist before any tool call
     return srv.mcp
 
 

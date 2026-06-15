@@ -52,8 +52,12 @@ async def test_job_create_and_complete():
     jm = JobManager()
     await jm.init_db()
     jid = await jm.create_job("test", ["echo", "done"], 10)
-    await asyncio.sleep(0.5)
-    job = await jm.get_job(jid)
+    # Poll until completed instead of a fixed sleep — avoids flakiness on slow CI
+    for _ in range(20):
+        await asyncio.sleep(0.2)
+        job = await jm.get_job(jid)
+        if job["status"] == "completed":
+            break
     assert job["status"] == "completed"
     assert "done" in job.get("output", "")
 

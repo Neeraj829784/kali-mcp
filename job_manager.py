@@ -80,7 +80,7 @@ class JobManager:
             )
             await db.commit()
         pid_holder: list[int] = []
-        task = asyncio.create_task(self._run_job(job_id, cmd, timeout, out_file, pid_holder))
+        task = asyncio.create_task(self._run_job(job_id, tool, cmd, timeout, out_file, pid_holder))
         _running[job_id] = (task, pid_holder)
         return job_id
 
@@ -99,7 +99,7 @@ class JobManager:
             )
             await db.commit()
         pid_holder: list[int] = []
-        task = asyncio.create_task(self._run_job(job_id, cmd, timeout, out_file, pid_holder))
+        task = asyncio.create_task(self._run_job(job_id, tool, cmd, timeout, out_file, pid_holder))
         _running[job_id] = (task, pid_holder)
         await task
         result = await self.get_job(job_id)
@@ -127,9 +127,9 @@ class JobManager:
                             findings = await verify_web_findings(findings, base_url)
                     result["findings"] = findings
                     result["findings_count"] = len(findings)
-                    # Auto-tag to active engagement (sync sqlite → run off the loop)
+                    # Auto-tag to active engagement (now fully async — no to_thread needed)
                     for f in findings:
-                        await asyncio.to_thread(eng_mod.tag_finding, f, job_id)
+                        await eng_mod.tag_finding(f, job_id)
                 suggestions = suggest_next(tool, output, target)
                 if suggestions:
                     result["suggested_next"] = suggestions
@@ -138,10 +138,11 @@ class JobManager:
 
         return result
 
-    async def _run_job(self, job_id: str, cmd: list[str], timeout: int, out_file: str, pid_holder: list[int]):
+    async def _run_job(self, job_id: str, tool: str, cmd: list[str], timeout: int, out_file: str, pid_holder: list[int]):
         await self._update(job_id, status="running")
-        # pid_holder is populated by the executor so cancel_job can kill the group
-        result = await _executor.run(cmd, timeout, output_file=out_file, pid_holder=pid_holder)
+        # Pass tool name so ToolExecutor can apply the correct rate-limit bucket
+        result = await _executor.run(cmd, timeout, output_file=out_file,
+                                     pid_holder=pid_holder, tool_name=tool)
         completed_at = datetime.now(timezone.utc).isoformat()
         if result.get("timed_out"):
             await self._update(job_id, status="failed",

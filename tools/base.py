@@ -3,6 +3,9 @@ import os
 import shutil
 import signal
 import tempfile
+import time
+
+from config import RATE_LIMITS
 
 # Map of common tools to install hints
 _INSTALL_HINTS = {
@@ -31,10 +34,52 @@ _INSTALL_HINTS = {
     "ssh": "apt install openssh-client",
 }
 
+# Per-tool rate limiting state: tool_name → monotonic timestamp of last launch
+# Keyed by tool name (matching RATE_LIMITS keys in config.py).
+# asyncio.Lock per tool prevents concurrent launches from racing past the gate.
+_rate_last: dict[str, float] = {}
+_rate_locks: dict[str, asyncio.Lock] = {}
+
+
+def _get_rate_lock(tool_name: str) -> asyncio.Lock:
+    """Return (creating if needed) the per-tool asyncio.Lock for rate gating."""
+    if tool_name not in _rate_locks:
+        _rate_locks[tool_name] = asyncio.Lock()
+    return _rate_locks[tool_name]
+
+
+async def _rate_gate(tool_name: str) -> None:
+    """
+    Enforce RATE_LIMITS[tool_name] (requests/sec).
+    If the limit is 0 or the tool is not listed, returns immediately.
+    Uses a per-tool async lock so parallel callers queue up rather than
+    all racing through together.
+    """
+    rps = RATE_LIMITS.get(tool_name, 0)
+    if not rps:
+        return  # no limit configured
+
+    interval = 1.0 / rps
+    lock = _get_rate_lock(tool_name)
+
+    async with lock:
+        now = time.monotonic()
+        last = _rate_last.get(tool_name, 0.0)
+        wait = interval - (now - last)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        _rate_last[tool_name] = time.monotonic()
+
 
 class ToolExecutor:
-    async def run(self, cmd: list[str], timeout: int = 120, output_file: str = "",
-                  pid_holder: list[int] | None = None) -> dict:
+    async def run(
+        self,
+        cmd: list[str],
+        timeout: int = 120,
+        output_file: str = "",
+        pid_holder: list[int] | None = None,
+        tool_name: str = "",
+    ) -> dict:
         """
         Run a command. Streams output to a temp file to avoid pipe deadlock and OOM.
         If output_file is given, output is written there instead.
@@ -42,6 +87,9 @@ class ToolExecutor:
         can be killed on timeout or cancel.
         If pid_holder is provided, the child PID is appended to it so callers
         (e.g. JobManager.cancel_job) can kill the process group on demand.
+
+        tool_name: optional logical name used for rate-limiting (e.g. 'nuclei',
+                   'gobuster_dir'). Defaults to the binary name (cmd[0]) if not set.
         """
         binary = cmd[0]
         if not shutil.which(binary):
@@ -51,6 +99,11 @@ class ToolExecutor:
                 "hint": f"To fix: {hint}",
                 "return_code": -1,
             }
+
+        # ── Rate limiting ─────────────────────────────────────────────────────
+        # Use explicit tool_name if provided, fall back to binary name so that
+        # e.g. gobuster_dir and gobuster_dns get separate buckets.
+        await _rate_gate(tool_name or binary)
 
         use_temp = not output_file
         if use_temp:
@@ -104,12 +157,15 @@ def _kill_pgroup(pid: int):
         os.killpg(pgid, signal.SIGTERM)
         # Give 2s then SIGKILL
         import threading
+
         def force_kill():
-            import time; time.sleep(2)
+            import time as _t
+            _t.sleep(2)
             try:
                 os.killpg(pgid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+
         threading.Thread(target=force_kill, daemon=True).start()
     except ProcessLookupError:
         pass
@@ -123,8 +179,11 @@ def safe_save_path(save_to: str) -> str:
     """
     from config import ARTIFACTS_DIR
     artifacts = os.path.realpath(ARTIFACTS_DIR)
-    candidate = os.path.realpath(save_to) if os.path.isabs(save_to) else \
-        os.path.realpath(os.path.join(artifacts, save_to))
+    candidate = (
+        os.path.realpath(save_to)
+        if os.path.isabs(save_to)
+        else os.path.realpath(os.path.join(artifacts, save_to))
+    )
     allowed = [artifacts, os.path.realpath("/tmp"), os.path.realpath("/var/tmp")]
     for root in allowed:
         try:

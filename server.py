@@ -37,6 +37,7 @@ job_mgr = JobManager()
 @asynccontextmanager
 async def lifespan(server: FastMCP) -> AsyncIterator[None]:
     await job_mgr.init_db()
+    await engagement.init_db()   # init engagement tables (async, non-blocking)
     yield
 
 

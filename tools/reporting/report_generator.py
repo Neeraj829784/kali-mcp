@@ -10,49 +10,48 @@ async def _collect_findings(
     host: str = "",
     confirmed_only: bool = False,
 ) -> list[dict]:
-    """Pull findings from job history + active engagement DB, dedup, return flat list."""
-    from findings import extract_findings, dedup_findings
+    """Pull findings from the engagement DB (fast path) or job history (lab fallback).
 
+    FIX: Replaced the O(n) job-scan loop with the same engagement DB fast path
+         used by triage.py. When an engagement is active, findings are already
+         pre-tagged in eng_findings at job-completion time — no re-extraction needed.
+         Falls back to raw job scan only in lab mode (no active engagement).
+    """
+    from findings import extract_findings, dedup_findings
+    import engagement as eng_mod
+    import aiosqlite
+
+    active = eng_mod.get_active()
+
+    if active:
+        # Fast path: read directly from the engagement DB
+        all_findings: list[dict] = []
+        async with eng_mod._get_db() as db:
+            status_filter = "AND status='confirmed'" if confirmed_only else ""
+            query = (
+                f"SELECT * FROM eng_findings WHERE engagement_id=? {status_filter} "
+                "ORDER BY added_at DESC LIMIT 2000"
+            )
+            async with db.execute(query, (active["id"],)) as cur:
+                rows = await cur.fetchall()
+        for row in rows:
+            f = dict(row)
+            f.setdefault("confidence", "medium")
+            if not host or f.get("host") == host:
+                all_findings.append(f)
+        return dedup_findings(all_findings)
+
+    # Slow fallback: no engagement active (lab/dev mode) — scan raw job history
     jobs = await job_mgr.list_jobs(200)
     all_findings = []
     for j in jobs:
         if j.get("status") != "completed":
             continue
         full = await job_mgr.get_job(j["id"])
+        raw_host = host if host else j.get("host", "unknown")
         all_findings.extend(
-            extract_findings(j["tool"], full.get("output", ""), host or "unknown")
+            extract_findings(j["tool"], full.get("output", ""), raw_host)
         )
-
-    all_findings = dedup_findings(all_findings)
-
-    try:
-        import engagement as eng_mod2
-        active = eng_mod2.get_active()
-        if active:
-            import sqlite3
-            db_path = eng_mod2.ENGAGEMENT_DB
-            with sqlite3.connect(db_path) as db:
-                db.row_factory = sqlite3.Row
-                status_filter = "AND status='confirmed'" if confirmed_only else ""
-                rows = db.execute(
-                    f"SELECT * FROM eng_findings WHERE engagement_id=? {status_filter} ORDER BY added_at DESC LIMIT 500",
-                    (active["id"],)
-                ).fetchall()
-            for row in rows:
-                all_findings.append({
-                    "host": row["host"] or "",
-                    "port": row["port"] or 0,
-                    "service": row["service"] or "",
-                    "title": row["title"] or "",
-                    "severity": row["severity"] or "info",
-                    "evidence": row["evidence"] or "",
-                    "tool": row["tool"] or "",
-                    "confidence": "medium",
-                })
-    except Exception as exc:
-        import logging
-        logging.getLogger(__name__).warning("Failed to load engagement findings: %s", exc)
-
     return dedup_findings(all_findings)
 
 

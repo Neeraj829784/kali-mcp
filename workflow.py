@@ -43,7 +43,7 @@ def _register(mcp, job_mgr):
             # masscan fast discovery across all 65535 ports
             import tempfile, os, re
             from config import ARTIFACTS_DIR
-            masscan_out = os.path.join(ARTIFACTS_DIR, f"masscan_{target}.txt")
+            masscan_out = os.path.join(ARTIFACTS_DIR, f"masscan_{target.replace('/', '_').replace(':', '_')}.txt")
             masscan_result = await _ex.run(
                 ["sudo", "-n", "masscan", target, "-p", "0-65535",
                  "--rate", "10000", "-oL", masscan_out, "--wait", "3"],

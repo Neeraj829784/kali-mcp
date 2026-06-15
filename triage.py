@@ -10,6 +10,7 @@ FIX: Replaced O(n) job re-scan with engagement DB read.
      instead of looping over all jobs and re-extracting from raw output.
      Falls back to the old job-scan path when no engagement is active (lab mode).
 """
+import asyncio
 from datetime import datetime, timezone
 
 
@@ -180,10 +181,10 @@ def _register(mcp, job_mgr):
             if f.get("severity") in ("critical", "high")
         ]
 
-        # Credential vault
+        # Credential vault — run in thread since cred_vault uses blocking sqlite3
         try:
             from cred_vault import get_all_credentials
-            stored_creds = get_all_credentials(limit=10)
+            stored_creds = await asyncio.to_thread(get_all_credentials, 10)
         except Exception:
             stored_creds = []
 

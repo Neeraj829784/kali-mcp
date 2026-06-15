@@ -201,6 +201,15 @@ class JobManager:
         completed_at = datetime.now(timezone.utc).isoformat()
         retry_count = await self._get_retry_count(job_id)
 
+        # Clean up any leftover retry temp files from failed attempts
+        for i in range(1, _MAX_RETRIES + 1):
+            retry_file = f"{out_file}.retry{i}"
+            if os.path.exists(retry_file):
+                try:
+                    os.unlink(retry_file)
+                except OSError:
+                    pass
+
         if last_result.get("timed_out"):
             await self._update(job_id, status="failed",
                                error=f"Timed out after {timeout}s (tried {retry_count + 1}x)",

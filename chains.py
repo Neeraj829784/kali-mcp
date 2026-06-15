@@ -114,7 +114,8 @@ def _signals(findings: list[dict]) -> dict[str, list[dict]]:
         "sqli":             _sqli_signal(findings),
         "creds":            _cred_signal(findings),
         "ssh_open":         [f for f in findings
-                             if f.get("port") == 22 or "ssh" in _text(f)],
+                             if f.get("port") == 22
+                             or ("ssh" in _text(f) and _conf(f) >= _CONF_RANK["medium"])],
         "admin_panel":      _keyword_signal(findings,
                                 "/admin", "/wp-admin", "/phpmyadmin",
                                 "admin panel", min_conf="low"),

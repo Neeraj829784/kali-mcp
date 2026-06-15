@@ -11,6 +11,12 @@ import aiosqlite
 from config import JOBS_DB_PATH, ARTIFACTS_DIR
 from tools.base import ToolExecutor, _kill_pgroup
 
+# Retry configuration
+# Only transient failures are retried (timeout, process crash).
+# Permanent failures (binary not found, scope error) are NOT retried.
+_MAX_RETRIES = 2
+_RETRY_BASE_DELAY = 2.0   # seconds — doubles each attempt (2s, 4s)
+
 _executor = ToolExecutor()
 # job_id -> (asyncio.Task, pid)
 _running: dict[str, tuple[asyncio.Task, list[int]]] = {}
@@ -19,8 +25,6 @@ _running: dict[str, tuple[asyncio.Task, list[int]]] = {}
 class JobManager:
     async def init_db(self):
         async with aiosqlite.connect(JOBS_DB_PATH, timeout=30) as db:
-            # WAL allows concurrent readers during a write; busy_timeout makes
-            # writers wait (instead of erroring) when the db is briefly locked.
             await db.execute("PRAGMA journal_mode=WAL")
             await db.execute("PRAGMA busy_timeout=30000")
             await db.execute("""
@@ -32,14 +36,19 @@ class JobManager:
                     completed_at TEXT,
                     output_file TEXT,
                     result TEXT,
-                    error TEXT
+                    error TEXT,
+                    retry_count INTEGER NOT NULL DEFAULT 0
                 )
             """)
-            # Migrate: add output_file column if upgrading from older schema
+            # Migrations for older schemas
             try:
                 await db.execute("ALTER TABLE jobs ADD COLUMN output_file TEXT")
             except Exception:
-                pass  # column already exists
+                pass
+            try:
+                await db.execute("ALTER TABLE jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0")
+            except Exception:
+                pass
             await db.commit()
         await self._reap_ghost_jobs()
         await self._purge_old_jobs()
@@ -140,20 +149,89 @@ class JobManager:
 
     async def _run_job(self, job_id: str, tool: str, cmd: list[str], timeout: int, out_file: str, pid_holder: list[int]):
         await self._update(job_id, status="running")
-        # Pass tool name so ToolExecutor can apply the correct rate-limit bucket
-        result = await _executor.run(cmd, timeout, output_file=out_file,
-                                     pid_holder=pid_holder, tool_name=tool)
+
+        last_result: dict = {}
+        for attempt in range(1 + _MAX_RETRIES):
+            if attempt > 0:
+                # Exponential backoff: 2s, 4s
+                delay = _RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                await asyncio.sleep(delay)
+                await self._update(job_id, status="running",
+                                   error=f"Retrying (attempt {attempt + 1})...",
+                                   retry_count=attempt)
+
+            # Fresh output file per attempt so partial output from a failed
+            # attempt doesn't pollute the final result
+            attempt_out = out_file if attempt == 0 else f"{out_file}.retry{attempt}"
+            pid_holder.clear()
+
+            last_result = await _executor.run(
+                cmd, timeout,
+                output_file=attempt_out,
+                pid_holder=pid_holder,
+                tool_name=tool,
+            )
+
+            timed_out = last_result.get("timed_out", False)
+            is_permanent_error = (
+                "Tool not found" in last_result.get("error", "")
+                or "not in scope" in last_result.get("error", "")
+            )
+
+            # Success or permanent error — stop retrying
+            if not timed_out and not (
+                "error" in last_result and last_result.get("return_code") == -1
+            ):
+                # Copy retry attempt output to canonical out_file path
+                if attempt > 0 and os.path.exists(attempt_out):
+                    import shutil
+                    shutil.move(attempt_out, out_file)
+                break
+
+            if is_permanent_error:
+                break  # no point retrying "binary not found"
+
+            # Clean up partial retry file before next attempt
+            if attempt > 0 and os.path.exists(attempt_out):
+                try:
+                    os.unlink(attempt_out)
+                except OSError:
+                    pass
+
         completed_at = datetime.now(timezone.utc).isoformat()
-        if result.get("timed_out"):
+        retry_count = await self._get_retry_count(job_id)
+
+        # Clean up any leftover retry temp files from failed attempts
+        for i in range(1, _MAX_RETRIES + 1):
+            retry_file = f"{out_file}.retry{i}"
+            if os.path.exists(retry_file):
+                try:
+                    os.unlink(retry_file)
+                except OSError:
+                    pass
+
+        if last_result.get("timed_out"):
             await self._update(job_id, status="failed",
-                               error=f"Timed out after {timeout}s", completed_at=completed_at)
-        elif "error" in result and result.get("return_code") == -1:
-            await self._update(job_id, status="failed", error=result["error"], completed_at=completed_at)
+                               error=f"Timed out after {timeout}s (tried {retry_count + 1}x)",
+                               completed_at=completed_at)
+        elif "error" in last_result and last_result.get("return_code") == -1:
+            await self._update(job_id, status="failed",
+                               error=last_result["error"],
+                               completed_at=completed_at)
         else:
             await self._update(job_id, status="completed",
-                               result=json.dumps({"return_code": result.get("return_code")}),
+                               result=json.dumps({"return_code": last_result.get("return_code")}),
+                               error=None,
                                completed_at=completed_at)
         _running.pop(job_id, None)
+
+    async def _get_retry_count(self, job_id: str) -> int:
+        async with aiosqlite.connect(JOBS_DB_PATH, timeout=30) as db:
+            async with db.execute(
+                "SELECT retry_count FROM jobs WHERE id = ?", (job_id,)
+            ) as cur:
+                row = await cur.fetchone()
+        return row[0] if row else 0
 
     async def _update(self, job_id: str, **fields):
         set_clause = ", ".join(f"{k} = ?" for k in fields)
@@ -188,7 +266,7 @@ class JobManager:
         async with aiosqlite.connect(JOBS_DB_PATH, timeout=30) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
-                "SELECT id, tool, status, created_at, completed_at FROM jobs "
+                "SELECT id, tool, status, created_at, completed_at, retry_count FROM jobs "
                 "ORDER BY created_at DESC LIMIT ?", (limit,)
             ) as cur:
                 rows = await cur.fetchall()

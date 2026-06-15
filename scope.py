@@ -1,31 +1,37 @@
 """
 Scope allowlist — all tool targets must pass check_scope() before execution.
 Add authorized targets to SCOPE_FILE (one per line: IPs, CIDRs, domains).
+
+FIX: Added threading.Lock around _cache reads/writes to prevent TOCTOU race
+     under concurrent tool calls (scan_host fires many tools in parallel).
 """
 import ipaddress
 import os
-import re
+import threading
 
 SCOPE_FILE = os.path.join(os.path.dirname(__file__), "scope.txt")
 
 _cache: list[str] | None = None
+_lock = threading.Lock()   # guards all _cache access
 
 
 def _load_scope() -> list[str]:
     global _cache
-    if _cache is not None:
+    with _lock:
+        if _cache is not None:
+            return _cache
+        if not os.path.exists(SCOPE_FILE):
+            _cache = []
+            return _cache
+        with open(SCOPE_FILE) as f:
+            _cache = [line.strip() for line in f if line.strip() and not line.startswith("#")]
         return _cache
-    if not os.path.exists(SCOPE_FILE):
-        _cache = []
-        return _cache
-    with open(SCOPE_FILE) as f:
-        _cache = [l.strip() for l in f if l.strip() and not l.startswith("#")]
-    return _cache
 
 
-def _invalidate():
+def _invalidate() -> None:
     global _cache
-    _cache = None
+    with _lock:
+        _cache = None
 
 
 def _is_ip(target: str) -> bool:
@@ -48,6 +54,7 @@ def check_scope(target: str) -> None:
     Raise ValueError if target is not in scope.
     Target can be IP, domain, or URL (hostname extracted).
     Scope file empty = all targets allowed (dev/lab mode).
+    Thread-safe: safe to call from concurrent asyncio tasks.
     """
     scope = _load_scope()
     if not scope:

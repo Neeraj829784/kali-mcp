@@ -7,17 +7,34 @@ credential, which unlocks an admin panel, which allows RCE). This module turns a
 flat list of findings into those compound-impact narratives.
 
 Pure functions, no I/O, no tool calls — fully unit-testable offline.
+
+FIX: Replaced pure keyword substring matching with confidence-weighted signals.
+     Each signal now considers the finding's confidence level and source tool,
+     not just text content. This eliminates false chains from low-confidence
+     Nikto noise (e.g. "password field" triggering the creds signal) and
+     ensures Hydra/SQLMap confirmed credentials always trigger correctly.
 """
 from __future__ import annotations
 
 # Severity ordering (kept local so this module has no hard dependency on findings.py)
 _SEV_RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 _RANK_SEV = {v: k for k, v in _SEV_RANK.items()}
+_CONF_RANK = {"low": 0, "medium": 1, "high": 2}
+
+# Tools whose findings are authoritative for specific signal types
+_CRED_TOOLS = {"hydra", "sqlmap", "cred_vault"}
+_SQLI_TOOLS = {"sqlmap"}
+_EXPLOIT_TOOLS = {"searchsploit", "metasploit", "cve_to_exploit"}
 
 
 def _text(f: dict) -> str:
     """Lowercased haystack of a finding's searchable fields."""
     return " ".join(str(f.get(k, "")) for k in ("title", "evidence", "service", "tool")).lower()
+
+
+def _conf(f: dict) -> int:
+    """Return numeric confidence rank for a finding."""
+    return _CONF_RANK.get(str(f.get("confidence", "medium")).lower(), 1)
 
 
 def _max_sev(findings: list[dict]) -> str:
@@ -32,30 +49,98 @@ def _escalate(base_sev: str, levels: int = 1) -> str:
     return _RANK_SEV[rank]
 
 
-# ── Signal detectors ──────────────────────────────────────────────────────────
-# Each returns the list of findings that match the signal (empty = signal absent).
+# ── Confidence-weighted signal detectors ─────────────────────────────────────
+# Rules:
+#   - Authoritative tool match  → always fires regardless of confidence
+#   - Keyword match + high conf → fires (scanner actively confirmed)
+#   - Keyword match + med conf  → fires (template matched)
+#   - Keyword match + low conf  → does NOT fire (Nikto noise, gobuster paths etc.)
+#
+# This prevents "password field detected" (low-conf Nikto) from triggering
+# credential chains while still catching all Hydra/SQLMap confirmed finds.
 
-def _match(findings: list[dict], *needles: str) -> list[dict]:
-    return [f for f in findings if any(n in _text(f) for n in needles)]
+def _cred_signal(findings: list[dict]) -> list[dict]:
+    """Credential findings: authoritative tools OR high/med confidence text match."""
+    result = []
+    for f in findings:
+        tool = str(f.get("tool", "")).lower()
+        txt = _text(f)
+        is_authoritative = tool in _CRED_TOOLS
+        is_keyword = any(k in txt for k in ("valid credential", "credentials found",
+                                             "password found", "login successful"))
+        if is_authoritative or (is_keyword and _conf(f) >= _CONF_RANK["medium"]):
+            result.append(f)
+    return result
+
+
+def _sqli_signal(findings: list[dict]) -> list[dict]:
+    """SQL injection: authoritative tool OR high-confidence text match only."""
+    result = []
+    for f in findings:
+        tool = str(f.get("tool", "")).lower()
+        txt = _text(f)
+        is_authoritative = tool in _SQLI_TOOLS
+        is_keyword = any(k in txt for k in ("sql injection", "sqli", "injectable"))
+        if is_authoritative or (is_keyword and _conf(f) >= _CONF_RANK["high"]):
+            result.append(f)
+    return result
+
+
+def _exploit_signal(findings: list[dict]) -> list[dict]:
+    """Exploit available: authoritative tool OR medium+ confidence text match."""
+    result = []
+    for f in findings:
+        tool = str(f.get("tool", "")).lower()
+        txt = _text(f)
+        is_authoritative = tool in _EXPLOIT_TOOLS
+        is_keyword = any(k in txt for k in ("cve-", "exploit", "searchsploit"))
+        if is_authoritative or (is_keyword and _conf(f) >= _CONF_RANK["medium"]):
+            result.append(f)
+    return result
+
+
+def _keyword_signal(findings: list[dict], *needles: str,
+                    min_conf: str = "medium") -> list[dict]:
+    """Generic keyword signal with configurable minimum confidence threshold."""
+    min_rank = _CONF_RANK.get(min_conf, 1)
+    return [
+        f for f in findings
+        if any(n in _text(f) for n in needles) and _conf(f) >= min_rank
+    ]
 
 
 def _signals(findings: list[dict]) -> dict[str, list[dict]]:
     return {
-        "sqli": _match(findings, "sql injection", "sqli", "injectable"),
-        "creds": _match(findings, "valid credential", "password:", "credentials found"),
-        "ssh_open": [f for f in findings if f.get("port") == 22 or "ssh" in _text(f)],
-        "admin_panel": _match(findings, "/admin", "/wp-admin", "/phpmyadmin", "login", "admin panel"),
-        "info_disclosure": _match(findings, ".git", ".env", "backup", "config", "phpinfo", "directory listing", "index of"),
-        "smb_vuln": _match(findings, "ms17-010", "eternalblue", "smb-vuln"),
-        "exploit_available": _match(findings, "searchsploit", "exploit", "cve-"),
-        "file_upload": _match(findings, "upload", "file upload"),
-        "lfi": _match(findings, "lfi", "local file inclusion", "path traversal", "directory traversal"),
-        "open_port": _match(findings, "open port"),
+        "sqli":             _sqli_signal(findings),
+        "creds":            _cred_signal(findings),
+        "ssh_open":         [f for f in findings
+                             if f.get("port") == 22
+                             or ("ssh" in _text(f) and _conf(f) >= _CONF_RANK["medium"])],
+        "admin_panel":      _keyword_signal(findings,
+                                "/admin", "/wp-admin", "/phpmyadmin",
+                                "admin panel", min_conf="low"),
+        "info_disclosure":  _keyword_signal(findings,
+                                ".git", ".env", "backup", "config",
+                                "phpinfo", "directory listing", "index of",
+                                min_conf="medium"),
+        "smb_vuln":         _keyword_signal(findings,
+                                "ms17-010", "eternalblue", "smb-vuln",
+                                min_conf="low"),
+        "exploit_available": _exploit_signal(findings),
+        "file_upload":      _keyword_signal(findings,
+                                "upload", "file upload",
+                                min_conf="medium"),
+        "lfi":              _keyword_signal(findings,
+                                "lfi", "local file inclusion",
+                                "path traversal", "directory traversal",
+                                min_conf="medium"),
+        "open_port":        [f for f in findings
+                             if "open port" in _text(f)
+                             and _conf(f) >= _CONF_RANK["high"]],
     }
 
 
 # ── Chain templates ─────────────────────────────────────────────────────────
-# Each template: (name, required signal keys, narrative, severity-escalation levels)
 
 _CHAIN_TEMPLATES = [
     {
@@ -151,12 +236,10 @@ def build_attack_chains(findings: list[dict]) -> list[dict]:
     sig = _signals(findings)
     chains = []
     for tpl in _CHAIN_TEMPLATES:
-        # all required signals must be present
         if not all(sig.get(req) for req in tpl["requires"]):
             continue
-        # gather the contributing findings (dedup by id-ish tuple)
         contributing: list[dict] = []
-        seen = set()
+        seen: set[tuple] = set()
         for req in tpl["requires"]:
             for f in sig[req]:
                 key = (f.get("host", ""), f.get("title", ""), f.get("tool", ""))
@@ -171,9 +254,13 @@ def build_attack_chains(findings: list[dict]) -> list[dict]:
             "severity": severity,
             "narrative": tpl["narrative"],
             "steps": [
-                {"title": f.get("title", ""), "host": f.get("host", ""),
-                 "tool": f.get("tool", ""), "severity": f.get("severity", "info"),
-                 "confidence": f.get("confidence", "medium")}
+                {
+                    "title": f.get("title", ""),
+                    "host": f.get("host", ""),
+                    "tool": f.get("tool", ""),
+                    "severity": f.get("severity", "info"),
+                    "confidence": f.get("confidence", "medium"),
+                }
                 for f in contributing
             ],
             "hosts": hosts,

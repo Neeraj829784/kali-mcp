@@ -136,9 +136,14 @@ class JobManager:
                             findings = await verify_web_findings(findings, base_url)
                     result["findings"] = findings
                     result["findings_count"] = len(findings)
-                    # Auto-tag to active engagement (now fully async — no to_thread needed)
+                    # Auto-tag to active engagement + webhook alert for high/critical
+                    from webhook import notify as _webhook_notify
+                    active_eng = eng_mod.get_active()
+                    eng_name = active_eng["name"] if active_eng else ""
                     for f in findings:
                         await eng_mod.tag_finding(f, job_id)
+                        if f.get("severity") in ("critical", "high"):
+                            asyncio.create_task(_webhook_notify(f, eng_name))
                 suggestions = suggest_next(tool, output, target)
                 if suggestions:
                     result["suggested_next"] = suggestions

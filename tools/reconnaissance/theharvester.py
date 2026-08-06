@@ -29,4 +29,4 @@ def _register(mcp, job_mgr):
         cmd = ["theHarvester", "-d", domain, "-l", str(limit), "-b", source]
         if dns_resolve:
             cmd += ["-r"]
-        return await job_mgr.run_and_wait("theharvester", cmd, TOOL_TIMEOUTS["theharvester"])
+        return await job_mgr.run_and_wait("theharvester", cmd, TOOL_TIMEOUTS["theharvester"], target=domain)

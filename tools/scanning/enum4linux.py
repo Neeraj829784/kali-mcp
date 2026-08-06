@@ -26,4 +26,4 @@ def _register(mcp, job_mgr):
         if password:
             cmd += ["-p", password]
         cmd.append(target)
-        return await job_mgr.run_and_wait("enum4linux", cmd, TOOL_TIMEOUTS["enum4linux"])
+        return await job_mgr.run_and_wait("enum4linux", cmd, TOOL_TIMEOUTS["enum4linux"], target=target)

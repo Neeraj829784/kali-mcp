@@ -45,6 +45,10 @@ _SCHEMA = """
         status TEXT NOT NULL DEFAULT 'unconfirmed',
         FOREIGN KEY(engagement_id) REFERENCES engagements(id)
     );
+    CREATE TABLE IF NOT EXISTS app_state (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    );
 """
 
 
@@ -74,6 +78,52 @@ async def init_db() -> None:
         except Exception:
             pass  # column already exists
         await db.commit()
+    # Restore the active engagement that was set before the last restart, so
+    # findings keep getting tagged and reports keep using the fast DB path.
+    await _restore_active()
+
+
+async def _persist_active_id(eng_id: int | None) -> None:
+    """Persist (or clear) the active engagement id in app_state."""
+    async with _get_db() as db:
+        if eng_id is None:
+            await db.execute("DELETE FROM app_state WHERE key='active_engagement_id'")
+        else:
+            await db.execute(
+                "INSERT INTO app_state (key, value) VALUES ('active_engagement_id', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (str(eng_id),),
+            )
+        await db.commit()
+
+
+async def _restore_active() -> None:
+    """Load the persisted active engagement id (if any) back into _active."""
+    global _active
+    async with _get_db() as db:
+        async with db.execute(
+            "SELECT value FROM app_state WHERE key='active_engagement_id'"
+        ) as cur:
+            row = await cur.fetchone()
+        if not row or row[0] is None:
+            return
+        try:
+            eng_id = int(row[0])
+        except (TypeError, ValueError):
+            return
+        async with db.execute(
+            "SELECT id, name, client, scope, status FROM engagements WHERE id=?", (eng_id,)
+        ) as cur:
+            eng = await cur.fetchone()
+    if not eng or eng["status"] != "active":
+        # Engagement was ended (or deleted) — clear the stale pointer.
+        await _persist_active_id(None)
+        return
+    try:
+        scope = json.loads(eng["scope"]) if eng["scope"] else []
+    except (TypeError, ValueError):
+        scope = []
+    _active = {"id": eng["id"], "name": eng["name"], "scope": scope, "client": eng["client"]}
 
 
 def get_active() -> dict | None:
@@ -152,6 +202,7 @@ def _register(mcp, job_mgr):
             await db.commit()
 
         _active = {"id": eng_id, "name": name, "scope": scope, "client": client}
+        await _persist_active_id(eng_id)
         return {
             "engagement": name,
             "status": "started",
@@ -180,7 +231,7 @@ def _register(mcp, job_mgr):
                 "SELECT COUNT(*) FROM eng_findings WHERE engagement_id=?",
                 (_active["id"],),
             ) as cur:
-                jobs_count = (await cur.fetchone())[0]
+                findings_total = (await cur.fetchone())[0]
 
         by_severity = {row["severity"]: row["cnt"] for row in findings}
         return {
@@ -190,7 +241,7 @@ def _register(mcp, job_mgr):
             "scope": json.loads(eng["scope"]),
             "status": eng["status"],
             "created_at": eng["created_at"],
-            "findings_total": jobs_count,
+            "findings_total": findings_total,
             "findings_by_severity": by_severity,
         }
 
@@ -245,6 +296,7 @@ def _register(mcp, job_mgr):
             await db.commit()
         name = _active["name"]
         _active = None
+        await _persist_active_id(None)
         clear_scope()
         return {"engagement": name, "status": "ended", "scope": "cleared (lab mode)"}
 

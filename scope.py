@@ -56,6 +56,15 @@ def check_scope(target: str) -> None:
     Scope file empty = all targets allowed (dev/lab mode).
     Thread-safe: safe to call from concurrent asyncio tasks.
     """
+    # Argument-injection guard: a target beginning with '-' could be parsed as a
+    # command-line flag by the downstream tool (e.g. '-oN/tmp/x'). Reject it here
+    # so the guard runs for EVERY tool that scope-checks its target — even in lab
+    # mode (empty scope), which returns early below.
+    if isinstance(target, str) and target.startswith("-"):
+        raise ValueError(
+            f"Refusing target that starts with '-' (possible argument injection): {target!r}"
+        )
+
     scope = _load_scope()
     if not scope:
         return  # no scope file = unrestricted (lab mode)
@@ -70,11 +79,12 @@ def check_scope(target: str) -> None:
             return
         if "/" in entry and _is_ip(host) and _in_cidr(host, entry):
             return
-        # Subdomain match: *.example.com
-        if entry.startswith("*.") and host.endswith(entry[1:]):
-            return
-        if host == entry.lstrip("*."):
-            return
+        # Wildcard entry like '*.example.com': match any subdomain AND the apex.
+        if entry.startswith("*."):
+            suffix = entry[1:]          # '.example.com' — subdomain match
+            apex = entry[2:]            # 'example.com'  — apex match
+            if host.endswith(suffix) or host == apex:
+                return
 
     raise ValueError(
         f"Target '{host}' is not in scope. "

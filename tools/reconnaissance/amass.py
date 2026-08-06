@@ -24,4 +24,4 @@ def _register(mcp, job_mgr):
             cmd += ["-passive"]
         if brute_force:
             cmd += ["-brute"]
-        return await job_mgr.run_and_wait("amass", cmd, TOOL_TIMEOUTS["amass"])
+        return await job_mgr.run_and_wait("amass", cmd, TOOL_TIMEOUTS["amass"], target=domain)

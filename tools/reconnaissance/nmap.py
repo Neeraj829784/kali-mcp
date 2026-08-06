@@ -3,7 +3,7 @@ import re
 
 from config import TOOL_TIMEOUTS
 from scope import check_scope
-from tools.base import ToolExecutor
+from tools.base import ToolExecutor, can_sudo_noninteractive, sudo_required_error
 from parsers import parse_nmap_xml
 
 _ex = ToolExecutor()
@@ -82,7 +82,7 @@ def _register(mcp, job_mgr):
             effective_type = "sS" if _IS_ROOT else "sT"
         cmd = ["nmap", f"-{effective_type}", f"-{timing}"] + port_args + tokens
         if wait:
-            return await job_mgr.run_and_wait("nmap_port_scan", cmd, TOOL_TIMEOUTS["nmap_port_scan"])
+            return await job_mgr.run_and_wait("nmap_port_scan", cmd, TOOL_TIMEOUTS["nmap_port_scan"], target=tokens[0])
         return {"job_id": await job_mgr.create_job("nmap_port_scan", cmd, TOOL_TIMEOUTS["nmap_port_scan"]),
                 "note": f"Using -{effective_type} ({'SYN/root' if effective_type == 'sS' else 'TCP connect'}). Pass wait=True to block."}
 
@@ -104,7 +104,7 @@ def _register(mcp, job_mgr):
             check_scope(t)
         cmd = ["nmap", "-sV", "--version-intensity", str(version_intensity),
                "-p", ports] + tokens
-        return await job_mgr.run_and_wait("nmap_service_detection", cmd, TOOL_TIMEOUTS["nmap_service_detection"])
+        return await job_mgr.run_and_wait("nmap_service_detection", cmd, TOOL_TIMEOUTS["nmap_service_detection"], target=tokens[0])
 
     @mcp.tool()
     async def nmap_os_detection(targets: str) -> dict:
@@ -119,8 +119,10 @@ def _register(mcp, job_mgr):
         for t in tokens:
             check_scope(t)
         base = ["nmap", "-O", "--osscan-guess"] + tokens
+        if not _IS_ROOT and not can_sudo_noninteractive():
+            return sudo_required_error("nmap OS detection (-O)")
         cmd = base if _IS_ROOT else ["sudo", "-n"] + base
-        return await job_mgr.run_and_wait("nmap_os_detection", cmd, TOOL_TIMEOUTS["nmap_os_detection"])
+        return await job_mgr.run_and_wait("nmap_os_detection", cmd, TOOL_TIMEOUTS["nmap_os_detection"], target=tokens[0])
 
     @mcp.tool()
     async def nmap_vuln_scan(
@@ -140,7 +142,7 @@ def _register(mcp, job_mgr):
         for t in tokens:
             check_scope(t)
         cmd = ["nmap", f"--script={scripts}", "-p", ports] + tokens
-        return await job_mgr.run_and_wait("nmap_vuln_scan", cmd, TOOL_TIMEOUTS["nmap_vuln_scan"])
+        return await job_mgr.run_and_wait("nmap_vuln_scan", cmd, TOOL_TIMEOUTS["nmap_vuln_scan"], target=tokens[0])
 
     @mcp.tool()
     async def nmap_aggressive_scan(targets: str, ports: str = "1-1000") -> dict:
@@ -155,7 +157,7 @@ def _register(mcp, job_mgr):
         for t in tokens:
             check_scope(t)
         cmd = ["nmap", "-A", "-p", ports] + tokens
-        return await job_mgr.run_and_wait("nmap_aggressive_scan", cmd, TOOL_TIMEOUTS["nmap_aggressive_scan"])
+        return await job_mgr.run_and_wait("nmap_aggressive_scan", cmd, TOOL_TIMEOUTS["nmap_aggressive_scan"], target=tokens[0])
 
     @mcp.tool()
     async def nmap_xml_scan(

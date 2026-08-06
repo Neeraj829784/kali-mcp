@@ -8,6 +8,7 @@ import asyncio
 import shutil
 
 from scope import check_scope
+from tools.base import can_sudo_noninteractive
 
 
 def _register(mcp, job_mgr):
@@ -39,7 +40,7 @@ def _register(mcp, job_mgr):
         # light/normal: straight nmap -sT -sV
         from tools.reconnaissance.nmap import _ex
 
-        if intensity == "deep" and shutil.which("masscan"):
+        if intensity == "deep" and shutil.which("masscan") and can_sudo_noninteractive():
             # masscan fast discovery across all 65535 ports
             import tempfile, os, re
             from config import ARTIFACTS_DIR, MASSCAN_RATE
@@ -95,41 +96,41 @@ def _register(mcp, job_mgr):
                 job_mgr.run_and_wait("nikto", [
                     "nikto", "-h", target, "-p", "80",
                     "-maxtime", "5m", "-nointeractive"
-                ], 360)
+                ], 360, target=target)
             )
             tasks["gobuster"] = asyncio.create_task(
                 job_mgr.run_and_wait("gobuster_dir", [
                     "gobuster", "dir", "-u", web_url,
                     "-w", "/usr/share/wordlists/dirb/common.txt",
                     "-t", "20", "--no-error", "-q", "-b", "404"
-                ], 300)
+                ], 300, target=target)
             )
             tasks["nuclei"] = asyncio.create_task(
                 job_mgr.run_and_wait("nuclei", [
                     "nuclei", "-u", web_url,
                     "-s", "medium,high,critical",
                     "-rl", "80", "-c", "15", "-silent"
-                ], 600)
+                ], 600, target=target)
             )
 
         if has_smb:
             tasks["enum4linux"] = asyncio.create_task(
                 job_mgr.run_and_wait("enum4linux", [
                     "enum4linux", "-a", target
-                ], 300)
+                ], 300, target=target)
             )
             tasks["smb_vulns"] = asyncio.create_task(
                 job_mgr.run_and_wait("nmap_vuln_scan", [
                     "nmap", "--script=smb-vuln-ms17-010,smb-security-mode,smb2-security-mode",
                     "-p", "445", target
-                ], 120)
+                ], 120, target=target)
             )
 
         if has_ssh and intensity != "light":
             tasks["ssh_banner"] = asyncio.create_task(
                 job_mgr.run_and_wait("nmap_service_detection", [
                     "nmap", "-sV", "--version-intensity", "5", "-p", "22", target
-                ], 60)
+                ], 60, target=target)
             )
 
         # Wait for all parallel tasks
@@ -187,7 +188,7 @@ def _register(mcp, job_mgr):
                     "nikto", "-h", url,
                     "-maxtime", "5m" if depth == "normal" else "10m",
                     "-nointeractive"
-                ], 360 if depth == "normal" else 720)
+                ], 360 if depth == "normal" else 720, target=url)
             ),
             "gobuster": asyncio.create_task(
                 job_mgr.run_and_wait("gobuster_dir", [
@@ -196,14 +197,14 @@ def _register(mcp, job_mgr):
                     "-t", "20", "--no-error", "-q",
                     "-x", "php,html,txt,js",
                     "-b", "404"
-                ], 300)
+                ], 300, target=url)
             ),
             "nuclei": asyncio.create_task(
                 job_mgr.run_and_wait("nuclei", [
                     "nuclei", "-u", url,
                     "-s", "info,low,medium,high,critical",
                     "-rl", "80", "-c", "15", "-silent"
-                ], 600)
+                ], 600, target=url)
             ),
         }
 
@@ -255,6 +256,10 @@ async def _screenshot_urls_inline(urls: list[str], job_mgr) -> dict:
     from config import ARTIFACTS_DIR
     screenshots_dir = os.path.join(ARTIFACTS_DIR, "screenshots")
     os.makedirs(screenshots_dir, exist_ok=True)
+    before = {
+        os.path.join(screenshots_dir, f)
+        for f in os.listdir(screenshots_dir) if f.endswith(".png")
+    }
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, dir=ARTIFACTS_DIR) as f:
         f.write("\n".join(urls))
         url_file = f.name
@@ -272,10 +277,11 @@ async def _screenshot_urls_inline(urls: list[str], job_mgr) -> dict:
     finally:
         if os.path.exists(url_file):
             os.unlink(url_file)
+    # Only the screenshots produced by this run.
     screenshots = sorted(
-        os.path.join(screenshots_dir, f)
-        for f in os.listdir(screenshots_dir)
-        if f.endswith(".png")
+        {os.path.join(screenshots_dir, f)
+         for f in os.listdir(screenshots_dir) if f.endswith(".png")}
+        - before
     )
     return {"screenshot_dir": screenshots_dir, "screenshots": screenshots, "count": len(screenshots)}
 
@@ -285,13 +291,14 @@ async def _crawl_simple(url: str, max_pages: int = 30) -> dict:
     import re
     import httpx
     from urllib.parse import urljoin, urlparse
+    from config import TLS_VERIFY
     base = urlparse(url)
     visited: set[str] = set()
     queue = [url]
     interesting = []
     _INT = re.compile(r"(admin|login|upload|api|config|backup|phpinfo|\.git|\.env|password)", re.I)
 
-    async with httpx.AsyncClient(follow_redirects=True, timeout=5) as client:
+    async with httpx.AsyncClient(follow_redirects=True, timeout=5, verify=TLS_VERIFY) as client:
         while queue and len(visited) < max_pages:
             cur = queue.pop(0)
             if cur in visited:

@@ -23,6 +23,9 @@ engagements.db
 # Credential vault encryption key — NEVER commit
 vault.key
 
+# SSH TOFU host-key pins — local trust store, never commit
+known_hosts
+
 # Local MCP/client config that may hold tokens
 claude_desktop_config.json
 

@@ -19,11 +19,38 @@ _SQLITE_TIMEOUT = 30
 
 
 def _load_key() -> bytes:
-    """Load the vault key from env or the local key file, creating one if absent."""
+    """Load the vault key from env or the local key file, creating one if absent.
+
+    Preference order:
+      1. KALI_MCP_VAULT_KEY env var — recommended (keep the key out of the repo
+         dir; source it from a secret manager / systemd credential / vault).
+      2. Local `vault.key` file — convenient but the key then lives next to the
+         ciphertext. We warn loudly and enforce 0600 so it is at least not group/
+         world readable. NEVER commit this file (it is git-ignored).
+    """
+    import logging
+    log = logging.getLogger(__name__)
+
     env_key = os.environ.get("KALI_MCP_VAULT_KEY")
     if env_key:
         return env_key.encode()
     if os.path.exists(KEY_FILE):
+        # Enforce restrictive permissions on an existing key file (repair if loose).
+        try:
+            mode = os.stat(KEY_FILE).st_mode & 0o777
+            if mode != 0o600:
+                os.chmod(KEY_FILE, 0o600)
+                log.warning(
+                    "cred_vault: tightened permissions on %s from %o to 600.",
+                    KEY_FILE, mode,
+                )
+        except OSError as e:
+            log.warning("cred_vault: could not verify/fix key file permissions: %s", e)
+        log.warning(
+            "cred_vault: using file-based vault key at %s. For better protection "
+            "set KALI_MCP_VAULT_KEY from a secret manager instead, and never commit "
+            "this file.", KEY_FILE,
+        )
         with open(KEY_FILE, "rb") as f:
             return f.read().strip()
     # Generate a new key with restrictive permissions (owner read/write only).
@@ -33,6 +60,12 @@ def _load_key() -> bytes:
         os.write(fd, key)
     finally:
         os.close(fd)
+    log.warning(
+        "cred_vault: generated a NEW vault key at %s (0600). Back it up with the "
+        "engagement — losing it makes stored ciphertext unrecoverable. Prefer "
+        "setting KALI_MCP_VAULT_KEY from a secret manager for production use.",
+        KEY_FILE,
+    )
     return key
 
 

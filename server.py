@@ -201,4 +201,30 @@ Always check scope_list() first."""
 
 
 if __name__ == "__main__":
-    mcp.run(transport="stdio")
+    # ── Transport security ────────────────────────────────────────────────────
+    # kali-mcp exposes full command-execution tooling and has NO authentication
+    # layer of its own. stdio is the only safe transport: the client spawns the
+    # server as a child process, so access is bounded by local process control.
+    #
+    # The HTTP/SSE transports would bind a network socket and serve every tool
+    # (nmap, sqlmap, metasploit, ssh_exec, ...) to ANY client that can reach the
+    # port — completely unauthenticated. Refuse to start that way unless the
+    # operator explicitly accepts the risk, and even then, warn loudly.
+    transport = os.environ.get("KALI_MCP_TRANSPORT", "stdio").lower()
+    if transport != "stdio":
+        if os.environ.get("KALI_MCP_INSECURE_ALLOW_NETWORK") != "yes":
+            raise SystemExit(
+                f"Refusing to start with '{transport}' transport: kali-mcp has no "
+                "authentication and would expose unauthenticated command execution "
+                "to the network. stdio is the only supported transport.\n"
+                "If you understand the risk and are on a trusted, isolated network, "
+                "override with KALI_MCP_INSECURE_ALLOW_NETWORK=yes (and put an "
+                "authenticating reverse proxy in front)."
+            )
+        audit.warning(
+            "SECURITY: starting with UNAUTHENTICATED '%s' transport — every tool "
+            "is exposed to the network with no auth. This is dangerous.", transport,
+        )
+        mcp.run(transport=transport)
+    else:
+        mcp.run(transport="stdio")

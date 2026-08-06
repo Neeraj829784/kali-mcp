@@ -5,7 +5,7 @@ import re
 
 import httpx
 
-from config import ARTIFACTS_DIR
+from config import ARTIFACTS_DIR, TLS_VERIFY
 from scope import check_scope
 
 
@@ -78,7 +78,7 @@ def _register(mcp, job_mgr):
         Returns: status, headers, body (or file path if save_to), redirect chain, timing
         """
         check_scope(url)
-        async with httpx.AsyncClient(follow_redirects=follow_redirects, timeout=timeout) as client:
+        async with httpx.AsyncClient(follow_redirects=follow_redirects, timeout=timeout, verify=TLS_VERIFY) as client:
             try:
                 resp = await client.request(method, url, headers=headers, cookies=cookies, content=data)
 
@@ -195,7 +195,7 @@ def _register(mcp, job_mgr):
         Returns: response status, headers, body, redirect chain
         """
         check_scope(url)
-        async with httpx.AsyncClient(follow_redirects=follow_redirects, timeout=30) as client:
+        async with httpx.AsyncClient(follow_redirects=follow_redirects, timeout=30, verify=TLS_VERIFY) as client:
             try:
                 if method.upper() == "GET":
                     resp = await client.get(url, params=form_data, headers=headers, cookies=cookies)

@@ -6,6 +6,18 @@ from config import ARTIFACTS_DIR, TOOL_TIMEOUTS
 from scope import check_scope
 
 
+def _png_set(directory: str) -> set[str]:
+    """Absolute paths of all PNG files currently in `directory`."""
+    try:
+        return {
+            os.path.join(directory, f)
+            for f in os.listdir(directory)
+            if f.endswith(".png")
+        }
+    except OSError:
+        return set()
+
+
 def _register(mcp, job_mgr):
 
     @mcp.tool()
@@ -23,6 +35,7 @@ def _register(mcp, job_mgr):
         check_scope(url)
         screenshots_dir = os.path.join(ARTIFACTS_DIR, "screenshots")
         os.makedirs(screenshots_dir, exist_ok=True)
+        before = _png_set(screenshots_dir)
         cmd = [
             "gowitness", "scan", "single",
             "--url", url,
@@ -31,15 +44,12 @@ def _register(mcp, job_mgr):
             "--write-jsonl", os.path.join(screenshots_dir, "results.jsonl"),
             "--quiet",
         ]
-        result = await job_mgr.run_and_wait("gowitness", cmd, TOOL_TIMEOUTS.get("default", 120))
-        # Find the screenshot file
-        screenshots = [
-            os.path.join(screenshots_dir, f)
-            for f in os.listdir(screenshots_dir)
-            if f.endswith(".png")
-        ]
+        result = await job_mgr.run_and_wait("gowitness", cmd, TOOL_TIMEOUTS.get("default", 120), target=url)
+        # Only report screenshots produced by THIS run, not stale ones in the dir.
+        new_shots = sorted(_png_set(screenshots_dir) - before)
         result["screenshot_dir"] = screenshots_dir
-        result["screenshots"] = sorted(screenshots)
+        result["screenshots"] = new_shots
+        result["count"] = len(new_shots)
         return result
 
     @mcp.tool()
@@ -61,6 +71,7 @@ def _register(mcp, job_mgr):
 
         screenshots_dir = os.path.join(ARTIFACTS_DIR, "screenshots")
         os.makedirs(screenshots_dir, exist_ok=True)
+        before = _png_set(screenshots_dir)
 
         # Write URLs to temp file
         with tempfile.NamedTemporaryFile(
@@ -81,12 +92,9 @@ def _register(mcp, job_mgr):
         result = await job_mgr.run_and_wait("gowitness", cmd, TOOL_TIMEOUTS.get("default", 120) * len(urls) // 4 + 60)
         os.unlink(url_file)
 
-        screenshots = [
-            os.path.join(screenshots_dir, f)
-            for f in os.listdir(screenshots_dir)
-            if f.endswith(".png")
-        ]
+        # Only report screenshots produced by THIS run.
+        new_shots = sorted(_png_set(screenshots_dir) - before)
         result["screenshot_dir"] = screenshots_dir
-        result["screenshots"] = sorted(screenshots)
-        result["count"] = len(screenshots)
+        result["screenshots"] = new_shots
+        result["count"] = len(new_shots)
         return result

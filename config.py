@@ -6,6 +6,17 @@ ARTIFACTS_DIR = os.path.join(BASE_DIR, "artifacts")
 AUDIT_LOG_PATH = os.path.join(BASE_DIR, "audit.log")
 SCOPE_FILE = os.path.join(BASE_DIR, "scope.txt")
 
+# TOFU known-hosts store for SSH host-key pinning (see tools/exploitation/ssh_tools.py).
+# First connection to a host pins its key here; a later key change is rejected as
+# a possible MITM. Git-ignored — never commit.
+SSH_KNOWN_HOSTS = os.path.join(BASE_DIR, "known_hosts")
+
+# Centralized TLS certificate verification for the built-in HTTP helpers
+# (finding verification, crawlers, http_request). Pentest targets frequently
+# use self-signed / expired certs, so this defaults to OFF for usability.
+# Set KALI_MCP_TLS_VERIFY=1 (or true/yes) to enforce certificate validation.
+TLS_VERIFY: bool = os.environ.get("KALI_MCP_TLS_VERIFY", "0").lower() in ("1", "true", "yes")
+
 # Ensure artifacts directory exists with restricted permissions
 os.makedirs(ARTIFACTS_DIR, exist_ok=True)
 os.chmod(ARTIFACTS_DIR, 0o700)
@@ -15,6 +26,16 @@ os.chmod(ARTIFACTS_DIR, 0o700)
 # Leave empty to disable notifications.
 WEBHOOK_URL: str = os.environ.get("KALI_MCP_WEBHOOK_URL", "")
 WEBHOOK_MIN_SEVERITY: str = os.environ.get("KALI_MCP_WEBHOOK_MIN_SEVERITY", "critical")
+
+# Maximum number of external tool subprocesses allowed to run concurrently
+# across the whole server. Per-tool RATE_LIMITS cap requests/sec, but NOT the
+# number of simultaneously-running processes — a few parallel deep scans
+# (scan_host/scan_web fan-out) could otherwise exhaust CPU/file descriptors.
+# This global semaphore bounds that. Override with KALI_MCP_MAX_CONCURRENT_TOOLS.
+try:
+    MAX_CONCURRENT_TOOLS: int = max(1, int(os.environ.get("KALI_MCP_MAX_CONCURRENT_TOOLS", "8")))
+except ValueError:
+    MAX_CONCURRENT_TOOLS = 8
 
 # Per-tool timeouts in seconds
 TOOL_TIMEOUTS = {

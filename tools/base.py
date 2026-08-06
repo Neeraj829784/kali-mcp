@@ -5,7 +5,7 @@ import signal
 import tempfile
 import time
 
-from config import RATE_LIMITS
+from config import RATE_LIMITS, MAX_CONCURRENT_TOOLS
 
 # Map of common tools to install hints
 _INSTALL_HINTS = {
@@ -48,6 +48,18 @@ def _get_rate_lock(tool_name: str) -> asyncio.Lock:
     return _rate_locks[tool_name]
 
 
+# Global cap on concurrently-running tool subprocesses. Created lazily because a
+# Semaphore must bind to the running event loop.
+_concurrency_sem: asyncio.Semaphore | None = None
+
+
+def _get_concurrency_sem() -> asyncio.Semaphore:
+    global _concurrency_sem
+    if _concurrency_sem is None:
+        _concurrency_sem = asyncio.Semaphore(MAX_CONCURRENT_TOOLS)
+    return _concurrency_sem
+
+
 async def _rate_gate(tool_name: str) -> None:
     """
     Enforce RATE_LIMITS[tool_name] (requests/sec).
@@ -69,6 +81,66 @@ async def _rate_gate(tool_name: str) -> None:
         if wait > 0:
             await asyncio.sleep(wait)
         _rate_last[tool_name] = time.monotonic()
+
+
+def guard_token(value: str, field: str = "argument") -> None:
+    """Reject a value that could be mis-parsed as a command-line flag.
+
+    Everything here is executed via exec() with an argv list, so classic shell
+    injection is impossible. The residual risk is *argument injection*: a value
+    like '-oN/tmp/x' or '--script=evil' landing in a positional argv slot and
+    being interpreted as a flag by the target tool. Callers pass user/LLM-supplied
+    positional values (targets, URLs, domains, query terms) through this guard.
+
+    Raises ValueError if `value` is a string beginning with '-'.
+    """
+    if isinstance(value, str) and value.startswith("-"):
+        raise ValueError(
+            f"Refusing {field} that starts with '-' (possible argument injection): {value!r}"
+        )
+
+
+_SUDO_NONINTERACTIVE: bool | None = None
+
+
+def can_sudo_noninteractive() -> bool:
+    """Return True if passwordless sudo is available (`sudo -n true` succeeds).
+
+    Cached after the first probe. Tools that rely on `sudo -n` (nmap -O, masscan)
+    use this to fail loudly with an actionable hint instead of silently returning
+    a 'sudo: a password is required' error buried in tool output.
+    """
+    global _SUDO_NONINTERACTIVE
+    if _SUDO_NONINTERACTIVE is None:
+        if os.geteuid() == 0:
+            _SUDO_NONINTERACTIVE = True
+        elif not shutil.which("sudo"):
+            _SUDO_NONINTERACTIVE = False
+        else:
+            try:
+                import subprocess
+                r = subprocess.run(
+                    ["sudo", "-n", "true"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    timeout=5,
+                )
+                _SUDO_NONINTERACTIVE = r.returncode == 0
+            except Exception:
+                _SUDO_NONINTERACTIVE = False
+    return _SUDO_NONINTERACTIVE
+
+
+def sudo_required_error(feature: str) -> dict:
+    """Standard error payload when a raw-socket feature has no root/sudo access."""
+    return {
+        "error": f"{feature} requires root or passwordless sudo, and neither is available.",
+        "hint": (
+            "Run the server as root, or configure passwordless sudo for the "
+            "relevant binary (e.g. an /etc/sudoers.d rule for nmap/masscan), or "
+            "use a scan mode that does not need raw sockets (e.g. nmap scan_type='sT')."
+        ),
+        "return_code": -1,
+    }
 
 
 class ToolExecutor:
@@ -113,25 +185,27 @@ class ToolExecutor:
             out_path = output_file
 
         try:
-            with open(out_path, "wb") as out_fh:
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=out_fh,
-                    stderr=asyncio.subprocess.STDOUT,
-                    # New session so we can kill the whole process group
-                    preexec_fn=os.setsid,
-                )
+            # Global concurrency cap — bound simultaneously-running subprocesses.
+            async with _get_concurrency_sem():
+                with open(out_path, "wb") as out_fh:
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdout=out_fh,
+                        stderr=asyncio.subprocess.STDOUT,
+                        # New session so we can kill the whole process group
+                        preexec_fn=os.setsid,
+                    )
 
-            # Expose the PID so cancel/timeout can kill the whole process group
-            if pid_holder is not None:
-                pid_holder.append(proc.pid)
+                # Expose the PID so cancel/timeout can kill the whole process group
+                if pid_holder is not None:
+                    pid_holder.append(proc.pid)
 
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=timeout)
-                timed_out = False
-            except asyncio.TimeoutError:
-                _kill_pgroup(proc.pid)
-                timed_out = True
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=timeout)
+                    timed_out = False
+                except asyncio.TimeoutError:
+                    _kill_pgroup(proc.pid)
+                    timed_out = True
 
             # Read output from file (safe — no OOM, no deadlock)
             with open(out_path, "r", errors="replace") as f:

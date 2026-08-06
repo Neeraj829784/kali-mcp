@@ -5,6 +5,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 from scope import check_scope
+from config import TLS_VERIFY
 
 
 def _register(mcp, job_mgr):
@@ -46,7 +47,7 @@ def _register(mcp, job_mgr):
 
         async with httpx.AsyncClient(
             follow_redirects=True, timeout=timeout,
-            headers={"User-Agent": "Mozilla/5.0"}
+            headers={"User-Agent": "Mozilla/5.0"}, verify=TLS_VERIFY,
         ) as client:
             while queue and len(visited) < max_pages:
                 current_url, depth = queue.pop(0)

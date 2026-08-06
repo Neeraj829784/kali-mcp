@@ -43,7 +43,7 @@ def _register(mcp, job_mgr):
             cmd += ["-x", extensions]
         if follow_redirect:
             cmd += ["-r"]
-        return await job_mgr.run_and_wait("gobuster_dir", cmd, TOOL_TIMEOUTS["gobuster_dir"])
+        return await job_mgr.run_and_wait("gobuster_dir", cmd, TOOL_TIMEOUTS["gobuster_dir"], target=url)
 
     @mcp.tool()
     async def gobuster_dns(
@@ -63,7 +63,7 @@ def _register(mcp, job_mgr):
         cmd = ["gobuster", "dns", "-d", domain, "-w", wl, "-t", str(threads), "-q"]
         if show_ips:
             cmd += ["-i"]
-        return await job_mgr.run_and_wait("gobuster_dns", cmd, TOOL_TIMEOUTS["gobuster_dns"])
+        return await job_mgr.run_and_wait("gobuster_dns", cmd, TOOL_TIMEOUTS["gobuster_dns"], target=domain)
 
     @mcp.tool()
     async def gobuster_vhost(
@@ -83,4 +83,4 @@ def _register(mcp, job_mgr):
         cmd = ["gobuster", "vhost", "-u", url, "-w", wl, "-t", str(threads), "-q"]
         if append_domain:
             cmd += ["--append-domain"]
-        return await job_mgr.run_and_wait("gobuster_vhost", cmd, TOOL_TIMEOUTS["gobuster_vhost"])
+        return await job_mgr.run_and_wait("gobuster_vhost", cmd, TOOL_TIMEOUTS["gobuster_vhost"], target=url)

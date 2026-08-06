@@ -68,9 +68,17 @@ async def test_nmap_aggressive_scan(mcp_server):
 
 @pytest.mark.asyncio
 async def test_nmap_os_detection_runs(mcp_server):
-    """OS detection may fail without root — but must not crash."""
+    """OS detection may fail without root — but must not crash.
+
+    With passwordless sudo (or as root) it runs and returns a job status.
+    Without either, the preflight returns a structured sudo-required error
+    (return_code -1) instead of silently launching a doomed 'sudo -n' job.
+    """
     r = await call(mcp_server, "nmap_os_detection", {"targets": "127.0.0.1"})
-    assert r.get("status") in ("completed", "failed")
+    assert (
+        r.get("status") in ("completed", "failed")
+        or r.get("return_code") == -1
+    )
 
 
 @pytest.mark.asyncio

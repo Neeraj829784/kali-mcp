@@ -24,4 +24,4 @@ def _register(mcp, job_mgr):
             cmd += ["-all"]
         if output_json:
             cmd += ["-oJ"]
-        return await job_mgr.run_and_wait("subfinder", cmd, TOOL_TIMEOUTS["subfinder"])
+        return await job_mgr.run_and_wait("subfinder", cmd, TOOL_TIMEOUTS["subfinder"], target=domain)

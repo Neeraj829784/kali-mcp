@@ -46,4 +46,4 @@ def _register(mcp, job_mgr):
             cmd += ["-H", headers]
         if auto_calibrate:
             cmd += ["-ac"]
-        return await job_mgr.run_and_wait("ffuf", cmd, TOOL_TIMEOUTS["ffuf"])
+        return await job_mgr.run_and_wait("ffuf", cmd, TOOL_TIMEOUTS["ffuf"], target=url)

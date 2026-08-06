@@ -25,4 +25,4 @@ def _register(mcp, job_mgr):
                "-maxtime", max_time, "-nointeractive"]
         if ssl:
             cmd += ["-ssl"]
-        return await job_mgr.run_and_wait("nikto", cmd, timeout)
+        return await job_mgr.run_and_wait("nikto", cmd, timeout, target=target)

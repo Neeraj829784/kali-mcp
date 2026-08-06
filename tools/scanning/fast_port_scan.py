@@ -5,7 +5,7 @@ import os
 
 from config import TOOL_TIMEOUTS, ARTIFACTS_DIR
 from scope import check_scope
-from tools.base import ToolExecutor
+from tools.base import ToolExecutor, can_sudo_noninteractive, sudo_required_error
 
 _ex = ToolExecutor()
 
@@ -32,6 +32,8 @@ def _register(mcp, job_mgr):
         NOTE: masscan requires root/sudo for raw sockets
         """
         check_scope(target)
+        if not can_sudo_noninteractive():
+            return sudo_required_error("masscan (raw-socket port scan)")
         out_file = os.path.join(ARTIFACTS_DIR, f"masscan_{target.replace('/', '_')}.txt")
 
         # Step 1: masscan fast discovery
@@ -54,6 +56,11 @@ def _register(mcp, job_mgr):
                     m = re.match(r"open tcp (\d+) (\S+)", line)
                     if m:
                         open_ports.append(int(m.group(1)))
+            # Temp discovery file — remove it now that it's parsed (avoids leak).
+            try:
+                os.unlink(out_file)
+            except OSError:
+                pass
 
         result = {
             "masscan_output": masscan_result.get("stdout", ""),

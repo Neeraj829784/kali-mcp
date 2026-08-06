@@ -4,6 +4,7 @@ import logging
 import os
 import signal
 import tempfile
+import time
 import uuid
 from datetime import datetime, timezone, timedelta
 
@@ -23,6 +24,41 @@ _RETRY_BASE_DELAY = 2.0   # seconds — doubles each attempt (2s, 4s)
 _executor = ToolExecutor()
 # job_id -> (asyncio.Task, pid)
 _running: dict[str, tuple[asyncio.Task, list[int]]] = {}
+
+
+def _host_from(value: str) -> str:
+    """Extract a bare hostname/IP from a URL or host:port string."""
+    v = value
+    if "://" in v:
+        v = v.split("://", 1)[1]
+    v = v.split("/", 1)[0]          # strip path
+    v = v.rsplit("@", 1)[-1]        # strip userinfo
+    if v.startswith("["):           # IPv6 literal [::1]:80
+        return v[1:].split("]", 1)[0]
+    return v.split(":", 1)[0]       # strip port
+
+
+def _derive_target(target: str, cmd: list[str]) -> str:
+    """Resolve the host a scan's findings should be attributed to.
+
+    Priority:
+      1. Explicit `target` passed by the caller (URL → hostname extracted).
+      2. First http(s):// URL found in the command (hostname extracted).
+      3. Last plausible bare token in the command (not a flag, flag-value,
+         file path, or the binary itself).
+    Returns "" only when nothing usable is found.
+    """
+    if target:
+        return _host_from(target)
+    for a in cmd:
+        if isinstance(a, str) and a.startswith(("http://", "https://")):
+            return _host_from(a)
+    return next(
+        (a for a in reversed(cmd)
+         if a and not a.startswith("-") and a != cmd[0]
+         and not os.path.exists(a) and "/" not in a),
+        "",
+    )
 
 
 class JobManager:
@@ -55,6 +91,7 @@ class JobManager:
             await db.commit()
         await self._reap_ghost_jobs()
         await self._purge_old_jobs()
+        await self._purge_orphaned_artifacts()
 
     async def _reap_ghost_jobs(self):
         """Mark any 'running' jobs left from a previous session as 'failed'."""
@@ -81,6 +118,28 @@ class JobManager:
             await db.execute("DELETE FROM jobs WHERE created_at < ?", (cutoff,))
             await db.commit()
 
+    async def _purge_orphaned_artifacts(self, days: int = 7):
+        """Remove artifact side files older than `days` by modification time.
+
+        The per-job purge only deletes files tracked in the jobs table's
+        output_file column. Tools also write side files that are NOT tracked
+        there — nuclei_*.jsonl, masscan_*.txt, gowitness screenshots/results —
+        which would otherwise accumulate forever over a long campaign. This
+        sweeps the artifacts dir (recursively) by mtime as a backstop.
+        """
+        cutoff = time.time() - days * 86400
+        try:
+            for root, _dirs, files in os.walk(ARTIFACTS_DIR):
+                for name in files:
+                    path = os.path.join(root, name)
+                    try:
+                        if os.path.getmtime(path) < cutoff:
+                            os.unlink(path)
+                    except OSError:
+                        continue  # file vanished or perms — skip, best-effort
+        except OSError:
+            _log.debug("Artifact purge walk failed", exc_info=True)
+
     async def create_job(self, tool: str, cmd: list[str], timeout: int) -> str:
         job_id = str(uuid.uuid4())[:8]
         now = datetime.now(timezone.utc).isoformat()
@@ -96,10 +155,15 @@ class JobManager:
         _running[job_id] = (task, pid_holder)
         return job_id
 
-    async def run_and_wait(self, tool: str, cmd: list[str], timeout: int) -> dict:
+    async def run_and_wait(self, tool: str, cmd: list[str], timeout: int, target: str = "") -> dict:
         """
         Create a job, run it, and return the result when done.
         Automatically extracts normalized findings and suggested next steps.
+
+        target: the logical target this scan is about (IP, hostname, or URL).
+                Callers should pass it explicitly so findings are attributed to
+                the right host. If omitted, a best-effort value is derived from
+                the command (URL hostname, else first plausible target token).
         """
         job_id = str(uuid.uuid4())[:8]
         now = datetime.now(timezone.utc).isoformat()
@@ -123,11 +187,8 @@ class JobManager:
                 from findings import extract_findings
                 from suggest import suggest_next
                 import engagement as eng_mod
-                # Best-effort target extraction from cmd — skip flag values and file paths
-                target = next((a for a in reversed(cmd)
-                               if a and not a.startswith("-") and a != cmd[0]
-                               and not os.path.exists(a) and "/" not in a), "")
-                findings = extract_findings(tool, output, target)
+                host = _derive_target(target, cmd)
+                findings = extract_findings(tool, output, host)
                 if findings:
                     # Run soft-404 / wildcard verification on web path findings
                     if tool in ("gobuster_dir", "gobuster_vhost", "ffuf"):
@@ -147,7 +208,7 @@ class JobManager:
                         await eng_mod.tag_finding(f, job_id)
                         if f.get("severity") in ("critical", "high"):
                             asyncio.create_task(_webhook_notify(f, eng_name))
-                suggestions = suggest_next(tool, output, target)
+                suggestions = suggest_next(tool, output, host)
                 if suggestions:
                     result["suggested_next"] = suggestions
             except Exception:

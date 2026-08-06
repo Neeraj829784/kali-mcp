@@ -591,10 +591,12 @@ async def verify_web_findings(findings: list[dict], base_url: str,
     except Exception:
         return findings
 
+    from config import TLS_VERIFY
+
     base = base_url if base_url.endswith("/") else base_url + "/"
 
     try:
-        async with httpx.AsyncClient(follow_redirects=False, timeout=8, verify=False) as client:  # noqa: S501 — pentest tool, self-signed certs expected
+        async with httpx.AsyncClient(follow_redirects=False, timeout=8, verify=TLS_VERIFY) as client:  # TLS verify centralized in config.TLS_VERIFY (default off for pentest self-signed certs)
             # Wildcard baseline from a path that should not exist
             rand = secrets.token_hex(16)
             try:

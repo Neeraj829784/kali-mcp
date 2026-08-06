@@ -6,6 +6,11 @@ ARTIFACTS_DIR = os.path.join(BASE_DIR, "artifacts")
 AUDIT_LOG_PATH = os.path.join(BASE_DIR, "audit.log")
 SCOPE_FILE = os.path.join(BASE_DIR, "scope.txt")
 
+# Program Scope & Policy engine store (see program_scope.py). Holds named
+# bug-bounty/pentest programs, their in/out-of-scope rules, rules-of-engagement
+# policies, and approval grants. Git-ignored — may contain real target scope.
+PROGRAMS_DB_PATH = os.path.join(BASE_DIR, "programs.db")
+
 # TOFU known-hosts store for SSH host-key pinning (see tools/exploitation/ssh_tools.py).
 # First connection to a host pins its key here; a later key change is rejected as
 # a possible MITM. Git-ignored — never commit.

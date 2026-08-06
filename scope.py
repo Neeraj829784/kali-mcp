@@ -49,11 +49,60 @@ def _in_cidr(target: str, cidr: str) -> bool:
         return False
 
 
+def _extract_host(target: str) -> str:
+    """Pull a bare hostname/IP out of a URL or host:port string."""
+    host = target
+    if "://" in target:
+        host = target.split("://", 1)[1].split("/")[0].split(":")[0]
+    return host
+
+
+def _matches(host: str, entry: str) -> bool:
+    """True if `host` matches a scope entry (exact, CIDR, or '*.domain' wildcard)."""
+    if entry == host:
+        return True
+    if "/" in entry and _is_ip(host) and _in_cidr(host, entry):
+        return True
+    # Wildcard entry like '*.example.com': match any subdomain AND the apex.
+    if entry.startswith("*."):
+        suffix = entry[1:]          # '.example.com' — subdomain match
+        apex = entry[2:]            # 'example.com'  — apex match
+        if host.endswith(suffix) or host == apex:
+            return True
+    return False
+
+
+# Out-of-scope denylist (in-memory). Set by the program scope engine
+# (program_scope.py) when a program is activated. Entries here are ALWAYS
+# rejected — even in lab mode — so an explicitly excluded target can never be
+# scanned regardless of the allowlist.
+_denylist: list[str] = []
+
+
+def set_denylist(entries: list[str]) -> None:
+    """Replace the out-of-scope denylist."""
+    global _denylist
+    with _lock:
+        _denylist = [e.strip() for e in entries if e and e.strip()]
+
+
+def clear_denylist() -> None:
+    global _denylist
+    with _lock:
+        _denylist = []
+
+
+def list_denylist() -> list[str]:
+    with _lock:
+        return list(_denylist)
+
+
 def check_scope(target: str) -> None:
     """
     Raise ValueError if target is not in scope.
     Target can be IP, domain, or URL (hostname extracted).
     Scope file empty = all targets allowed (dev/lab mode).
+    An out-of-scope denylist (set via set_denylist) is enforced even in lab mode.
     Thread-safe: safe to call from concurrent asyncio tasks.
     """
     # Argument-injection guard: a target beginning with '-' could be parsed as a
@@ -65,26 +114,23 @@ def check_scope(target: str) -> None:
             f"Refusing target that starts with '-' (possible argument injection): {target!r}"
         )
 
+    host = _extract_host(target)
+
+    # Out-of-scope denylist takes precedence over everything, including lab mode.
+    for entry in list_denylist():
+        if _matches(host, entry):
+            raise ValueError(
+                f"Target '{host}' is explicitly OUT OF SCOPE for the active program "
+                f"(matched deny rule '{entry}'). Refusing to proceed."
+            )
+
     scope = _load_scope()
     if not scope:
         return  # no scope file = unrestricted (lab mode)
 
-    # Extract hostname from URL
-    host = target
-    if "://" in target:
-        host = target.split("://", 1)[1].split("/")[0].split(":")[0]
-
     for entry in scope:
-        if entry == host:
+        if _matches(host, entry):
             return
-        if "/" in entry and _is_ip(host) and _in_cidr(host, entry):
-            return
-        # Wildcard entry like '*.example.com': match any subdomain AND the apex.
-        if entry.startswith("*."):
-            suffix = entry[1:]          # '.example.com' — subdomain match
-            apex = entry[2:]            # 'example.com'  — apex match
-            if host.endswith(suffix) or host == apex:
-                return
 
     raise ValueError(
         f"Target '{host}' is not in scope. "

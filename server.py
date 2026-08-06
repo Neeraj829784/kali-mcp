@@ -7,13 +7,14 @@ from mcp.server.fastmcp import FastMCP
 
 from config import AUDIT_LOG_PATH
 from job_manager import JobManager
-from scope import check_scope, add_scope, list_scope, set_scope, remove_scope, clear_scope
+from scope import check_scope, add_scope, list_scope, set_scope, remove_scope, clear_scope, set_denylist, clear_denylist
 import cred_vault
 import findings as findings_mod
 import health
 import engagement
 import workflow
 import triage
+import program_scope
 from tools import file_tools
 from tools.reconnaissance import nmap, whois_tool, dig_tool, subfinder, theharvester, amass
 from tools.scanning import nikto, gobuster, enum4linux, smbclient_tool, ffuf
@@ -38,6 +39,7 @@ job_mgr = JobManager()
 async def lifespan(server: FastMCP) -> AsyncIterator[None]:
     await job_mgr.init_db()
     await engagement.init_db()   # init engagement tables (async, non-blocking)
+    await program_scope.init_db()  # init program scope tables
     yield
 
 
@@ -51,7 +53,7 @@ for module in [nmap, whois_tool, dig_tool, subfinder, theharvester, amass,
                report_generator, pcap_parser, web_tools, web_crawler, screenshot,
                health, file_tools,
                cred_vault, findings_mod,
-               engagement, workflow, triage]:
+               engagement, workflow, triage, program_scope]:
     module._register(mcp, job_mgr)
 
 
@@ -145,6 +147,12 @@ async def scope_clear() -> dict:
     clear_scope()
     audit.info("scope_clear")
     return {"mode": "lab (all targets allowed)", "scope": []}
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+async def program_scope_status() -> dict:
+    """Show the current active program scope."""
+    return await program_scope.get_active()
 
 
 # ── MCP Prompts — reusable workflow templates ─────────────────────────────────

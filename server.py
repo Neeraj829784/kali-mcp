@@ -15,6 +15,7 @@ import engagement
 import workflow
 import triage
 import program_scope
+import asset_inventory
 from tools import file_tools
 from tools.reconnaissance import nmap, whois_tool, dig_tool, subfinder, theharvester, amass
 from tools.scanning import nikto, gobuster, enum4linux, smbclient_tool, ffuf
@@ -40,6 +41,7 @@ async def lifespan(server: FastMCP) -> AsyncIterator[None]:
     await job_mgr.init_db()
     await engagement.init_db()   # init engagement tables (async, non-blocking)
     await program_scope.init_db()  # init program scope tables
+    await asset_inventory.init_db()  # init asset inventory tables
     yield
 
 
@@ -53,7 +55,7 @@ for module in [nmap, whois_tool, dig_tool, subfinder, theharvester, amass,
                report_generator, pcap_parser, web_tools, web_crawler, screenshot,
                health, file_tools,
                cred_vault, findings_mod,
-               engagement, workflow, triage, program_scope]:
+               engagement, workflow, triage, program_scope, asset_inventory]:
     module._register(mcp, job_mgr)
 
 

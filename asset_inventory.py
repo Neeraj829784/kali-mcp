@@ -97,13 +97,16 @@ async def _ensure_host_exists(db, ip: str | None, hostname: str | None) -> int:
     """Insert or find a host, return its id."""
     if not ip and not hostname:
         raise ValueError("At least one of ip or hostname must be provided")
+    # Store empty string (not NULL) for the missing field so the UNIQUE(ip,
+    # hostname) constraint actually dedupes — SQLite treats NULLs as distinct.
+    ip = ip or ""
+    hostname = hostname or ""
     sql = """
         INSERT INTO hosts (ip, hostname, first_seen, last_seen, scan_count, status)
         VALUES (?, ?, ?, ?, 1, 'new')
         ON CONFLICT(ip, hostname) DO UPDATE SET
             last_seen=excluded.last_seen,
-            scan_count=hosts.scan_count + 1,
-            status=excluded.status
+            scan_count=hosts.scan_count + 1
         RETURNING id
     """
     now = datetime.now(timezone.utc).isoformat()
@@ -138,24 +141,38 @@ async def _upsert_vulnerability(db, host_id: int, service_id: int | None,
                                  cve_id: str | None, title: str, severity: str,
                                  confidence: str, remediation: str | None,
                                  findings_data: dict) -> int:
-    """Insert or update a vulnerability."""
-    sql = """
-        INSERT INTO vulnerabilities (host_id, service_id, cve_id, title, severity,
-                                      confidence, remediation, status, first_found,
-                                      last_seen, findings_data)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'unconfirmed', ?, ?, ?)
-        ON CONFLICT(host_id, cve_id) DO UPDATE SET
-            title=excluded.title,
-            severity=excluded.severity,
-            confidence=excluded.confidence,
-            remediation=COALESCE(excluded.remediation, vulnerabilities.remediation),
-            last_seen=excluded.last_seen,
-            findings_data=excluded.findings_data
-        RETURNING id
+    """Insert or update a vulnerability.
+
+    Dedupe key is (host_id, title, cve_id-or-empty). Done with an explicit
+    SELECT-then-INSERT/UPDATE rather than ON CONFLICT because cve_id is often
+    NULL (most findings have no CVE) and SQLite treats NULLs as distinct in a
+    UNIQUE constraint, which would defeat deduplication.
     """
     now = datetime.now(timezone.utc).isoformat()
-    cur = await db.execute(sql, (host_id, service_id, cve_id, title, severity, confidence,
-                                  remediation, now, now, json.dumps(findings_data)))
+    cur = await db.execute(
+        "SELECT id FROM vulnerabilities "
+        "WHERE host_id=? AND title=? AND IFNULL(cve_id,'')=IFNULL(?,'')",
+        (host_id, title, cve_id),
+    )
+    row = await cur.fetchone()
+    if row:
+        vuln_id = row[0]
+        await db.execute(
+            "UPDATE vulnerabilities SET severity=?, confidence=?, "
+            "remediation=COALESCE(?, remediation), "
+            "service_id=COALESCE(?, service_id), "
+            "last_seen=?, findings_data=? WHERE id=?",
+            (severity, confidence, remediation, service_id, now,
+             json.dumps(findings_data), vuln_id),
+        )
+        return vuln_id
+    cur = await db.execute(
+        "INSERT INTO vulnerabilities (host_id, service_id, cve_id, title, severity, "
+        "confidence, remediation, status, first_found, last_seen, findings_data) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, 'unconfirmed', ?, ?, ?) RETURNING id",
+        (host_id, service_id, cve_id, title, severity, confidence, remediation,
+         now, now, json.dumps(findings_data)),
+    )
     row = await cur.fetchone()
     return row[0]
 
@@ -324,11 +341,16 @@ def _register(mcp, job_mgr):
         """
         sev_rank = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
         min_rank = sev_rank.get(min_severity.lower(), 0)
-        query = """
-            SELECT v.*, h.ip, h.hostname FROM vulnerabilities v
-            JOIN hosts h ON v.host_id = h.id
-            WHERE v.severity_rank >= ?
-        """
+        # Rank severity via a CASE expression (there is no stored severity_rank column).
+        rank_case = (
+            "CASE v.severity WHEN 'critical' THEN 4 WHEN 'high' THEN 3 "
+            "WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END"
+        )
+        query = (
+            "SELECT v.*, h.ip, h.hostname FROM vulnerabilities v "
+            "JOIN hosts h ON v.host_id = h.id "
+            f"WHERE {rank_case} >= ?"
+        )
         params: list = [min_rank]
         if host_ip:
             query += " AND h.ip = ?"
@@ -336,7 +358,7 @@ def _register(mcp, job_mgr):
         if status:
             query += " AND v.status = ?"
             params.append(status)
-        query += " ORDER BY v.severity_rank DESC, v.last_seen DESC LIMIT ?"
+        query += f" ORDER BY {rank_case} DESC, v.last_seen DESC LIMIT ?"
         params.append(limit)
         async with _get_db() as db:
             async with db.execute(query, params) as cur:

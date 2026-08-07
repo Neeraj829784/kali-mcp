@@ -151,12 +151,6 @@ async def scope_clear() -> dict:
     return {"mode": "lab (all targets allowed)", "scope": []}
 
 
-@mcp.tool(annotations={"readOnlyHint": True})
-async def program_scope_status() -> dict:
-    """Show the current active program scope."""
-    return await program_scope.get_active()
-
-
 # ── MCP Prompts — reusable workflow templates ─────────────────────────────────
 
 @mcp.prompt()

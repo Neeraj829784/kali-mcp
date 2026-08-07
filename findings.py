@@ -501,10 +501,40 @@ def extract_findings(tool: str, output: str, host: str) -> list[dict]:
     if not extractor or not output:
         return []
     try:
-        return extractor(output, host)
+        findings = extractor(output, host)
     except Exception:
         _log.debug("Extractor failed for tool=%s host=%s", tool, host, exc_info=True)
         return []
+    return apply_evidence_floor(findings)
+
+
+# ── Evidence-anchored confidence floor (anti-hallucination) ──────────────────
+# A finding may only claim MEDIUM/HIGH confidence if it is backed by concrete
+# evidence (a matched string, HTTP response, PoC output, ...). Findings with no
+# substantive evidence are capped at LOW confidence so that neither a noisy tool
+# NOR the driving LLM can present an unsubstantiated claim as high-confidence.
+# This is a server-authoritative guarantee applied at every pipeline chokepoint.
+_MIN_EVIDENCE_LEN = 3
+
+
+def apply_evidence_floor(findings: list[dict]) -> list[dict]:
+    """Cap confidence to LOW for any finding lacking substantive evidence.
+
+    A finding is considered evidence-anchored if EITHER it carries substantive
+    evidence text OR it was corroborated by 2+ distinct tools (cross-tool
+    agreement is itself strong evidence). Everything else is capped at LOW.
+
+    Idempotent — safe to call repeatedly (at extraction, dedup, and report time).
+    Marks capped findings with confidence_capped=True for transparency/audit.
+    """
+    for f in findings:
+        evidence = str(f.get("evidence", "") or "").strip()
+        corroborated = len(f.get("tools", []) or []) >= 2
+        if len(evidence) < _MIN_EVIDENCE_LEN and not corroborated:
+            if _CONF_RANK.get(f.get("confidence", CONF_MEDIUM), 1) > _CONF_RANK[CONF_LOW]:
+                f["confidence"] = CONF_LOW
+                f["confidence_capped"] = True
+    return findings
 
 
 _SEV_RANK = {INFO: 0, LOW: 1, MEDIUM: 2, HIGH: 3, CRITICAL: 4}
@@ -554,7 +584,10 @@ def dedup_findings(findings: list[dict]) -> list[dict]:
             rank = min(_CONF_RANK.get(nf.get("confidence", CONF_MEDIUM), 1) + 1, _CONF_RANK[CONF_HIGH])
             nf["confidence"] = _RANK_CONF[rank]
         result.append(nf)
-    return result
+    # Final server-authoritative gate: no substantive evidence => cap at LOW,
+    # even after corroboration. Prevents evidence-less findings from surfacing
+    # as medium/high in triage and reports.
+    return apply_evidence_floor(result)
 
 
 # Tools whose path findings can be actively re-checked over HTTP.

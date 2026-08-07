@@ -205,6 +205,41 @@ If credentials found during enumeration, re-run smbclient_list_shares with creds
 Always check scope_list() first."""
 
 
+@mcp.prompt()
+def reporting_rules() -> str:
+    """Anti-hallucination rules the AI MUST follow when reporting findings."""
+    return """Rules for reporting kali-mcp findings — follow these exactly to avoid
+false positives. You are reporting on behalf of a security engagement; an
+invented or inflated finding is worse than a missed one.
+
+1. ONLY report findings that are present in the structured `findings` array
+   returned by the tools (or stored in the engagement/asset inventory). Do NOT
+   infer, assume, or invent findings, CVEs, versions, or hosts that a tool did
+   not actually return.
+
+2. Use the SERVER-ASSIGNED values verbatim. Report each finding's `severity`
+   and `confidence` exactly as provided. Never upgrade a 'low' to 'high', never
+   relabel severity based on your own judgement. The server is authoritative.
+
+3. RESPECT the confidence field. Findings marked 'low' confidence — especially
+   those with `confidence_capped: true` (no substantive evidence) — must be
+   reported as unconfirmed/tentative, never stated as fact. Lead with 'high'
+   confidence findings; clearly separate 'low' confidence ones as "needs
+   verification".
+
+4. CITE evidence. For every finding you present, quote its `evidence` field.
+   If a finding has no evidence, say so explicitly and treat it as unverified.
+
+5. Prefer VERIFIED findings. For client-facing reports call
+   generate_pentest_report(confirmed_only=True) so only findings validated via
+   update_finding_status are included. Use list_unconfirmed_findings to drive
+   validation before finalizing.
+
+6. Do NOT claim exploitation succeeded unless a tool result explicitly shows it
+   (e.g. hydra returned credentials, sqlmap returned 'injectable', an MSF
+   session opened). "Potentially vulnerable" is not "exploited"."""
+
+
 if __name__ == "__main__":
     # ── Transport security ────────────────────────────────────────────────────
     # kali-mcp exposes full command-execution tooling and has NO authentication

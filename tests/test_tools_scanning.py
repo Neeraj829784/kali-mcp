@@ -25,10 +25,21 @@ async def test_gobuster_dir_no_status_codes_conflict(mcp_server):
 
 
 @pytest.mark.asyncio
-async def test_gobuster_dir_with_extensions(mcp_server):
+async def test_gobuster_dir_with_extensions(mcp_server, tmp_path):
+    """Regression: passing extensions (-x) must not break the command.
+
+    Uses a tiny wordlist so the scan finishes quickly — with the full 4600-word
+    common.txt list, extensions triple the request volume (word, word.php,
+    word.html) against a remote host and blow past the test timeout.
+    """
+    wl = tmp_path / "mini.txt"
+    wl.write_text("index\nadmin\nlogin\n")
     r = await call(mcp_server, "gobuster_dir", {
-        "url": "http://example.com/", "extensions": "php,html", "threads": 5
+        "url": "http://example.com/", "extensions": "php,html",
+        "threads": 5, "wordlist": str(wl),
     })
+    output = r.get("output", "")
+    assert "both set" not in output, "status-codes conflict bug re-introduced"
     assert r.get("status") == "completed"
 
 

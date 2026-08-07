@@ -8,7 +8,9 @@ version = "1.0.0"
 description = "AI-assisted penetration testing MCP server"
 requires-python = ">=3.11"
 dependencies = [
-    "mcp[cli]>=1.27.2",
+    # Pin below 2.0: mcp 2.0.0 removed the `mcp.server.fastmcp` module the
+    # server is built on. Stay on the 1.x line until we migrate to the new API.
+    "mcp[cli]>=1.27.2,<2",
     "aiosqlite>=0.22.1",
     "httpx>=0.28.1",
     "paramiko>=5.0.0",

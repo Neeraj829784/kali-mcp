@@ -1,7 +1,7 @@
 # kali-mcp Documentation
 
 Welcome. This is the complete documentation for **kali-mcp** — an AI-powered
-penetration testing platform that turns 30+ Kali Linux security tools into
+penetration testing platform that turns 20+ Kali Linux security tools into 101
 structured, AI-callable actions.
 
 New here? Read the pages in order. Already set up? Jump to whatever you need.

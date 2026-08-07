@@ -16,6 +16,7 @@ import workflow
 import triage
 import program_scope
 import asset_inventory
+import recon_sweep
 from tools import file_tools
 from tools.reconnaissance import nmap, whois_tool, dig_tool, subfinder, theharvester, amass
 from tools.scanning import nikto, gobuster, enum4linux, smbclient_tool, ffuf
@@ -55,7 +56,7 @@ for module in [nmap, whois_tool, dig_tool, subfinder, theharvester, amass,
                report_generator, pcap_parser, web_tools, web_crawler, screenshot,
                health, file_tools,
                cred_vault, findings_mod,
-               engagement, workflow, triage, program_scope, asset_inventory]:
+               engagement, workflow, triage, program_scope, asset_inventory, recon_sweep]:
     module._register(mcp, job_mgr)
 
 

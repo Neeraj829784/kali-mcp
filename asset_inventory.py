@@ -69,10 +69,31 @@ _SCHEMA = """
         key TEXT PRIMARY KEY,
         value TEXT
     );
+    CREATE TABLE IF NOT EXISTS scan_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        program TEXT DEFAULT '',
+        kind TEXT DEFAULT 'passive',
+        status TEXT DEFAULT 'running',
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        host_count INTEGER DEFAULT 0,
+        service_count INTEGER DEFAULT 0,
+        vuln_count INTEGER DEFAULT 0,
+        notes TEXT DEFAULT ''
+    );
+    CREATE TABLE IF NOT EXISTS run_assets (
+        run_id INTEGER NOT NULL,
+        asset_type TEXT NOT NULL,   -- 'host' | 'service' | 'vuln'
+        asset_id INTEGER NOT NULL,
+        detail TEXT DEFAULT '',     -- snapshot for change detection (version, severity, ...)
+        PRIMARY KEY (run_id, asset_type, asset_id)
+    );
     CREATE INDEX IF NOT EXISTS idx_hosts_ip ON hosts(ip);
     CREATE INDEX IF NOT EXISTS idx_services_host ON services(host_id);
     CREATE INDEX IF NOT EXISTS idx_vulns_host ON vulnerabilities(host_id);
     CREATE INDEX IF NOT EXISTS idx_vulns_cve ON vulnerabilities(cve_id);
+    CREATE INDEX IF NOT EXISTS idx_run_assets_run ON run_assets(run_id);
+    CREATE INDEX IF NOT EXISTS idx_scan_runs_program ON scan_runs(program);
 """
 
 
@@ -177,10 +198,11 @@ async def _upsert_vulnerability(db, host_id: int, service_id: int | None,
     return row[0]
 
 
-async def ingest_finding(f: dict) -> dict:
+async def ingest_finding(f: dict, run_id: int | None = None) -> dict:
     """
     Ingest a finding into the asset inventory.
     Creates/updates host, service, and vulnerability records as needed.
+    If run_id is given, records which assets this run observed (for diffing).
     Returns a summary dict with created/updated ids.
     """
     host_ip = f.get("host", "")
@@ -210,10 +232,168 @@ async def ingest_finding(f: dict) -> dict:
             remediation = _get_remediation_from_title(title)
             vuln_id = await _upsert_vulnerability(db, host_id, service_id, cve_id, title, severity,
                                                   confidence, remediation, f)
+        # Record run membership + change-detection snapshot detail
+        if run_id is not None:
+            await _record_membership(db, run_id, "host", host_id, host_ip)
+            if service_id is not None:
+                await _record_membership(db, run_id, "service", service_id,
+                                         f"{service}:{port}")
+            if vuln_id is not None:
+                await _record_membership(db, run_id, "vuln", vuln_id, severity)
         await db.commit()
 
     return {"host_id": host_id, "service_id": service_id, "vuln_id": vuln_id,
-            "host_ip": host_ip, "port": port, "severity": severity}
+            "host_ip": host_ip, "port": port, "severity": severity, "run_id": run_id}
+
+
+# ── Scan runs & change detection (continuous recon) ──────────────────────────
+
+async def _record_membership(db, run_id: int, asset_type: str, asset_id: int,
+                             detail: str = "") -> None:
+    """Record that `run_id` observed an asset, with a snapshot detail for diffing."""
+    await db.execute(
+        "INSERT INTO run_assets (run_id, asset_type, asset_id, detail) VALUES (?,?,?,?) "
+        "ON CONFLICT(run_id, asset_type, asset_id) DO UPDATE SET detail=excluded.detail",
+        (run_id, asset_type, asset_id, detail or ""),
+    )
+
+
+async def start_run(program: str = "", kind: str = "passive", notes: str = "") -> int:
+    """Open a new scan run and return its id. Findings ingested with this run_id
+    become part of the run's observed-asset snapshot."""
+    now = datetime.now(timezone.utc).isoformat()
+    async with _get_db() as db:
+        cur = await db.execute(
+            "INSERT INTO scan_runs (program, kind, status, started_at, notes) "
+            "VALUES (?, ?, 'running', ?, ?) RETURNING id",
+            (program, kind, now, notes),
+        )
+        run_id = (await cur.fetchone())[0]
+        await db.commit()
+    return run_id
+
+
+async def finish_run(run_id: int, status: str = "completed") -> dict:
+    """Close a scan run and record the counts of assets it observed."""
+    now = datetime.now(timezone.utc).isoformat()
+    async with _get_db() as db:
+        counts = {}
+        for t in ("host", "service", "vuln"):
+            async with db.execute(
+                "SELECT COUNT(*) FROM run_assets WHERE run_id=? AND asset_type=?",
+                (run_id, t),
+            ) as cur:
+                counts[t] = (await cur.fetchone())[0]
+        await db.execute(
+            "UPDATE scan_runs SET status=?, finished_at=?, host_count=?, "
+            "service_count=?, vuln_count=? WHERE id=?",
+            (status, now, counts["host"], counts["service"], counts["vuln"], run_id),
+        )
+        await db.commit()
+    return {"run_id": run_id, "status": status,
+            "host_count": counts["host"], "service_count": counts["service"],
+            "vuln_count": counts["vuln"]}
+
+
+def diff_snapshots(prev: dict, curr: dict) -> dict:
+    """Pure diff of two run snapshots. No I/O — fully unit-testable.
+
+    prev/curr are dicts: {asset_type: {asset_id: detail}}.
+    Returns per-type {"new": [...], "disappeared": [...], "changed": [...]}
+    where 'changed' means the asset was present in both runs but its detail
+    (version / severity / tech) differs.
+    """
+    out: dict = {}
+    for t in ("host", "service", "vuln"):
+        p = prev.get(t, {})
+        c = curr.get(t, {})
+        p_ids, c_ids = set(p), set(c)
+        both = p_ids & c_ids
+        out[t] = {
+            "new": sorted(c_ids - p_ids),
+            "disappeared": sorted(p_ids - c_ids),
+            "changed": sorted(i for i in both if p[i] != c[i]),
+        }
+    return out
+
+
+async def _membership(db, run_id: int) -> dict:
+    """Load {asset_type: {asset_id: detail}} for a run."""
+    snap: dict = {"host": {}, "service": {}, "vuln": {}}
+    async with db.execute(
+        "SELECT asset_type, asset_id, detail FROM run_assets WHERE run_id=?", (run_id,)
+    ) as cur:
+        for row in await cur.fetchall():
+            snap.setdefault(row["asset_type"], {})[row["asset_id"]] = row["detail"] or ""
+    return snap
+
+
+async def _label_assets(db, asset_type: str, ids: list[int]) -> dict:
+    """Resolve asset ids to human-readable labels for a diff report."""
+    if not ids:
+        return {}
+    q = ",".join("?" * len(ids))
+    labels: dict = {}
+    if asset_type == "host":
+        async with db.execute(
+            f"SELECT id, ip, hostname FROM hosts WHERE id IN ({q})", ids
+        ) as cur:
+            for r in await cur.fetchall():
+                labels[r["id"]] = r["hostname"] or r["ip"]
+    elif asset_type == "service":
+        async with db.execute(
+            f"SELECT s.id, h.ip, s.port, s.service, s.version FROM services s "
+            f"JOIN hosts h ON s.host_id=h.id WHERE s.id IN ({q})", ids
+        ) as cur:
+            for r in await cur.fetchall():
+                svc = r["service"] or "?"
+                ver = f" {r['version']}" if r["version"] else ""
+                labels[r["id"]] = f"{r['ip']}:{r['port']} ({svc}{ver})"
+    elif asset_type == "vuln":
+        async with db.execute(
+            f"SELECT v.id, h.ip, v.title, v.severity FROM vulnerabilities v "
+            f"JOIN hosts h ON v.host_id=h.id WHERE v.id IN ({q})", ids
+        ) as cur:
+            for r in await cur.fetchall():
+                labels[r["id"]] = f"[{r['severity']}] {r['title']} @ {r['ip']}"
+    return labels
+
+
+async def compare_runs(prev_run_id: int, curr_run_id: int) -> dict:
+    """Diff two runs and return a human-readable change report."""
+    async with _get_db() as db:
+        prev = await _membership(db, prev_run_id)
+        curr = await _membership(db, curr_run_id)
+        raw = diff_snapshots(prev, curr)
+        report: dict = {"prev_run_id": prev_run_id, "curr_run_id": curr_run_id, "changes": {}}
+        total = 0
+        for t in ("host", "service", "vuln"):
+            section = {}
+            for change_type in ("new", "disappeared", "changed"):
+                ids = raw[t][change_type]
+                if not ids:
+                    continue
+                labels = await _label_assets(db, t, ids)
+                section[change_type] = [labels.get(i, str(i)) for i in ids]
+                total += len(ids)
+            if section:
+                report["changes"][t] = section
+        report["total_changes"] = total
+    return report
+
+
+async def latest_runs(program: str = "", limit: int = 2) -> list[dict]:
+    """Return the most recent completed runs (optionally for one program)."""
+    query = "SELECT * FROM scan_runs WHERE status='completed'"
+    params: list = []
+    if program:
+        query += " AND program=?"
+        params.append(program)
+    query += " ORDER BY finished_at DESC LIMIT ?"
+    params.append(limit)
+    async with _get_db() as db:
+        async with db.execute(query, params) as cur:
+            return [dict(r) for r in await cur.fetchall()]
 
 
 def _get_remediation_from_title(title: str) -> str | None:
@@ -420,13 +600,74 @@ def _register(mcp, job_mgr):
             return {"error": f"Vulnerability {vuln_id} not found"}
         return {"vuln_id": vuln_id, "status": status, "updated": True}
 
+    @mcp.tool()
+    async def asset_list_runs(program: str = "", limit: int = 20) -> dict:
+        """
+        List recorded scan runs (recon cycles), newest first.
+        program: filter by program name (empty = all)
+        limit: max results
+        """
+        query = "SELECT * FROM scan_runs"
+        params: list = []
+        if program:
+            query += " WHERE program=?"
+            params.append(program)
+        query += " ORDER BY started_at DESC LIMIT ?"
+        params.append(limit)
+        async with _get_db() as db:
+            async with db.execute(query, params) as cur:
+                runs = [dict(r) for r in await cur.fetchall()]
+        return {"total": len(runs), "runs": runs}
 
-async def auto_ingest_findings(findings: list[dict], host: str = "") -> list[dict]:
-    """Ingest a batch of findings and return summaries."""
+    @mcp.tool()
+    async def asset_diff_runs(prev_run_id: int, curr_run_id: int) -> dict:
+        """
+        Compare two scan runs and report what changed between them.
+        Reports new / disappeared / changed hosts, services, and vulnerabilities.
+        prev_run_id: the earlier (baseline) run id
+        curr_run_id: the later run id
+        """
+        return await compare_runs(prev_run_id, curr_run_id)
+
+    @mcp.tool()
+    async def asset_latest_changes(program: str = "") -> dict:
+        """
+        Show what changed between the two most recent completed runs.
+        This is the core continuous-recon view: 'what's new since last time?'
+        program: focus on one program (empty = all runs across programs)
+        Returns: change report + a 'new_assets' list flagged as high-priority
+                 (newly deployed assets are often less tested).
+        """
+        runs = await latest_runs(program, limit=2)
+        if len(runs) < 2:
+            return {
+                "note": "Need at least two completed runs to diff.",
+                "runs_found": len(runs),
+                "hint": "Run recon_sweep() at least twice.",
+            }
+        curr, prev = runs[0], runs[1]  # newest first
+        report = await compare_runs(prev["id"], curr["id"])
+        # Surface newly-appeared assets as the priority list
+        changes = report.get("changes", {})
+        new_assets = []
+        for t in ("host", "service"):
+            new_assets.extend(changes.get(t, {}).get("new", []))
+        report["priority_new_assets"] = new_assets
+        report["program"] = program or "(all)"
+        return report
+
+
+async def auto_ingest_findings(findings: list[dict], host: str = "",
+                               run_id: int | None = None) -> list[dict]:
+    """Ingest a batch of findings and return summaries.
+
+    If run_id is given, all findings are recorded as observed by that run so a
+    later diff can detect new / disappeared / changed assets.
+    """
     results = []
     for f in findings:
         if not f.get("host") and host:
             f["host"] = host
-        result = await ingest_finding(f)
+        result = await ingest_finding(f, run_id=run_id)
         results.append(result)
     return results

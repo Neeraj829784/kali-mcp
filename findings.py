@@ -601,17 +601,100 @@ def _extract_path(finding: dict) -> str:
     return m.group(1) if m else ""
 
 
+# ── Content-aware verification helpers (pure, testable) ──────────────────────
+
+def _looks_like_git_head(text: str) -> bool:
+    """True if the body is a real .git/HEAD: a symbolic ref or a commit hash."""
+    t = (text or "").strip()
+    if t.startswith("ref:"):
+        return True
+    # bare detached HEAD is a 40-hex (sha1) or 64-hex (sha256) object id
+    return bool(re.fullmatch(r"[0-9a-f]{40}", t) or re.fullmatch(r"[0-9a-f]{64}", t))
+
+
+def _looks_like_env(text: str) -> bool:
+    """True if the body contains at least one KEY=value line (a real .env file)."""
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", line):
+            return True
+    return False
+
+
+def classify_web_verification(entries: list[dict], baseline: tuple | None,
+                              cluster_threshold: int = 8,
+                              length_tolerance: int = 64) -> list[str]:
+    """Pure decision core for web-path verification. No I/O — fully testable.
+
+    entries: aligned list of dicts, each:
+        {"status": int|None, "length": int, "content_verified": bool|None}
+    baseline: (status, length) of a known-nonexistent path, or None.
+
+    Returns an aligned list of actions: 'confirm' | 'drop' | 'keep'.
+
+    Decision order per finding:
+      1. status is None (fetch failed)      -> 'keep'  (never lose data on error)
+      2. content_verified is True            -> 'confirm' (git/env actively proven)
+      3. content_verified is False           -> 'drop'   (claimed but content disproves)
+      4. matches wildcard baseline           -> 'drop'   (soft-404)
+      5. shares a catch-all cluster signature-> 'drop'   (wildcard responder)
+      6. otherwise                           -> 'confirm' (distinct real response)
+    """
+    from collections import Counter
+
+    def sig(e: dict) -> tuple:
+        return (e["status"], e["length"] // (length_tolerance + 1))
+
+    counts = Counter(sig(e) for e in entries if e.get("status") is not None)
+    catch_all = {s for s, c in counts.items() if c >= cluster_threshold}
+
+    actions: list[str] = []
+    for e in entries:
+        if e.get("status") is None:
+            actions.append("keep")
+            continue
+        cv = e.get("content_verified")
+        if cv is True:
+            actions.append("confirm")
+            continue
+        if cv is False:
+            actions.append("drop")
+            continue
+        if baseline and e["status"] == baseline[0] and \
+                abs(e["length"] - baseline[1]) <= length_tolerance:
+            actions.append("drop")
+            continue
+        if sig(e) in catch_all:
+            actions.append("drop")
+            continue
+        actions.append("confirm")
+    return actions
+
+
 async def verify_web_findings(findings: list[dict], base_url: str,
-                              length_tolerance: int = 64) -> list[dict]:
-    """Soft-404 / wildcard filtering + active confirmation for web path findings.
+                              length_tolerance: int = 64,
+                              cluster_threshold: int = 8) -> list[dict]:
+    """Active server-side verification for web path findings (gobuster/ffuf).
 
-    Requests a random non-existent path to establish a wildcard baseline. Any
-    gobuster/ffuf path whose response matches that baseline (same status and a
-    near-identical body length) is treated as a soft-404 and dropped. Paths that
-    respond differently are actively confirmed and promoted to HIGH confidence.
+    Beyond trusting the scanner OR the driving LLM, this re-requests each path
+    and decides its fate from the ACTUAL response:
 
-    Non-web findings pass through untouched. Never raises — on any network error
-    the findings are returned unchanged so verification failure can't lose data.
+    * Soft-404 / wildcard: a random non-existent path establishes a baseline;
+      paths matching it (same status + near-identical length) are dropped.
+    * Catch-all clustering: if many distinct paths return the same
+      (status, length) signature, the server is a wildcard responder and the
+      whole cluster is dropped — catches SPA/catch-all apps the pairwise
+      baseline misses.
+    * Content-aware proof: an exposed '.git' is verified by fetching
+      '/.git/HEAD' and checking it's a real git ref; a claimed '.env' is
+      verified to actually contain KEY=value lines. Proven exposures are
+      promoted to HIGH confidence; disproven ones are dropped.
+
+    Only server-verified findings earn HIGH confidence. Non-web findings pass
+    through untouched. Never raises — on any network error findings are returned
+    unchanged so verification failure can't lose data.
     """
     if not base_url or not findings:
         return findings
@@ -628,6 +711,12 @@ async def verify_web_findings(findings: list[dict], base_url: str,
 
     base = base_url if base_url.endswith("/") else base_url + "/"
 
+    # Indices of web-path findings we can actually re-check.
+    web_idx = [i for i, f in enumerate(findings)
+               if f.get("tool") in _WEB_PATH_TOOLS and _extract_path(f)]
+    if not web_idx:
+        return findings
+
     try:
         async with httpx.AsyncClient(follow_redirects=False, timeout=8, verify=TLS_VERIFY) as client:  # TLS verify centralized in config.TLS_VERIFY (default off for pentest self-signed certs)
             # Wildcard baseline from a path that should not exist
@@ -638,30 +727,62 @@ async def verify_web_findings(findings: list[dict], base_url: str,
             except Exception:
                 baseline = None
 
-            verified: list[dict] = []
-            for f in findings:
-                if f.get("tool") not in _WEB_PATH_TOOLS:
-                    verified.append(f)
-                    continue
+            entries: list[dict] = []
+            meta: list[tuple] = []  # (finding_index, path, status, length, content_verified)
+            for i in web_idx:
+                f = findings[i]
                 path = _extract_path(f)
-                if not path:
-                    verified.append(f)
-                    continue
                 try:
                     resp = await client.get(urljoin(base, path.lstrip("/")))
                 except Exception:
-                    verified.append(f)  # leave unchanged on error
+                    entries.append({"status": None, "length": 0, "content_verified": None})
+                    meta.append((i, path, None, 0, None))
                     continue
-                # Soft-404: same status as wildcard baseline and ~same body length
-                if baseline and resp.status_code == baseline[0] and \
-                        abs(len(resp.content) - baseline[1]) <= length_tolerance:
-                    continue  # drop false positive
-                # Actively confirmed distinct response
-                nf = dict(f)
-                nf["confidence"] = CONF_HIGH
-                nf["evidence"] = f"HTTP {resp.status_code} at {path} (confirmed, {len(resp.content)} bytes)"
-                verified.append(nf)
-            return verified
+                status = resp.status_code
+                length = len(resp.content)
+                low = path.lower()
+                content_verified: bool | None = None
+                # .git exposure — verify the canonical HEAD is a real git ref
+                if ".git" in low:
+                    try:
+                        head = await client.get(urljoin(base, ".git/HEAD"))
+                        content_verified = (head.status_code == 200
+                                            and _looks_like_git_head(head.text))
+                    except Exception:
+                        content_verified = None
+                # .env exposure — verify the body is a real dotenv file
+                elif low.endswith(".env") or "/.env" in low:
+                    content_verified = (status == 200 and _looks_like_env(resp.text))
+                entries.append({"status": status, "length": length,
+                                "content_verified": content_verified})
+                meta.append((i, path, status, length, content_verified))
+
+            actions = classify_web_verification(
+                entries, baseline, cluster_threshold, length_tolerance
+            )
+
+            drop_indices: set[int] = set()
+            confirm_map: dict[int, tuple] = {}
+            for (i, path, status, length, cv), action in zip(meta, actions):
+                if action == "drop":
+                    drop_indices.add(i)
+                elif action == "confirm":
+                    confirm_map[i] = (path, status, length, cv)
+
+            result: list[dict] = []
+            for i, f in enumerate(findings):
+                if i in drop_indices:
+                    continue
+                if i in confirm_map:
+                    path, status, length, cv = confirm_map[i]
+                    nf = dict(f)
+                    nf["confidence"] = CONF_HIGH
+                    tag = "content-verified" if cv else "confirmed"
+                    nf["evidence"] = f"HTTP {status} at {path} ({tag}, {length} bytes)"
+                    result.append(nf)
+                else:
+                    result.append(f)
+            return result
     except Exception:
         return findings
 

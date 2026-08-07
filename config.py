@@ -1,20 +1,40 @@
 import os
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-JOBS_DB_PATH = os.path.join(BASE_DIR, "jobs.db")
-ARTIFACTS_DIR = os.path.join(BASE_DIR, "artifacts")
-AUDIT_LOG_PATH = os.path.join(BASE_DIR, "audit.log")
-SCOPE_FILE = os.path.join(BASE_DIR, "scope.txt")
+
+# ── Data directory ────────────────────────────────────────────────────────────
+# All writable runtime state (databases, credential vault + key, artifacts, audit
+# log, scope file, SSH known_hosts) lives under DATA_DIR so it is cleanly
+# separated from source code — one folder to back up, migrate, or mount as a
+# Docker volume. Defaults to BASE_DIR so existing local setups are unchanged;
+# override with KALI_MCP_DATA_DIR to relocate everything at once.
+DATA_DIR = os.environ.get("KALI_MCP_DATA_DIR", "").strip() or BASE_DIR
+
+JOBS_DB_PATH = os.path.join(DATA_DIR, "jobs.db")
+ARTIFACTS_DIR = os.path.join(DATA_DIR, "artifacts")
+AUDIT_LOG_PATH = os.path.join(DATA_DIR, "audit.log")
+SCOPE_FILE = os.path.join(DATA_DIR, "scope.txt")
 
 # Program Scope & Policy engine store (see program_scope.py). Holds named
 # bug-bounty/pentest programs, their in/out-of-scope rules, rules-of-engagement
-# policies, and approval grants. Git-ignored — may contain real target scope.
-PROGRAMS_DB_PATH = os.path.join(BASE_DIR, "programs.db")
+# policies, and approval grants. Also backs the persistent asset inventory and
+# continuous-recon scan runs (asset_inventory.py). Git-ignored — may contain
+# real target scope.
+PROGRAMS_DB_PATH = os.path.join(DATA_DIR, "programs.db")
+
+# Engagement database (see engagement.py) — per-test-session findings.
+ENGAGEMENT_DB_PATH = os.path.join(DATA_DIR, "engagements.db")
+
+# Credential vault (see cred_vault.py). VAULT_DB holds Fernet-encrypted secrets;
+# VAULT_KEY_FILE is the encryption key — losing it makes ciphertext unrecoverable.
+# Both git-ignored — NEVER commit.
+VAULT_DB_PATH = os.path.join(DATA_DIR, "vault.db")
+VAULT_KEY_FILE = os.path.join(DATA_DIR, "vault.key")
 
 # TOFU known-hosts store for SSH host-key pinning (see tools/exploitation/ssh_tools.py).
 # First connection to a host pins its key here; a later key change is rejected as
 # a possible MITM. Git-ignored — never commit.
-SSH_KNOWN_HOSTS = os.path.join(BASE_DIR, "known_hosts")
+SSH_KNOWN_HOSTS = os.path.join(DATA_DIR, "known_hosts")
 
 # Centralized TLS certificate verification for the built-in HTTP helpers
 # (finding verification, crawlers, http_request). Pentest targets frequently
@@ -22,7 +42,13 @@ SSH_KNOWN_HOSTS = os.path.join(BASE_DIR, "known_hosts")
 # Set KALI_MCP_TLS_VERIFY=1 (or true/yes) to enforce certificate validation.
 TLS_VERIFY: bool = os.environ.get("KALI_MCP_TLS_VERIFY", "0").lower() in ("1", "true", "yes")
 
-# Ensure artifacts directory exists with restricted permissions
+# Ensure the data dir and artifacts dir exist with restricted permissions.
+# 0o700 keeps engagement data, credentials, and scope private to the owner.
+os.makedirs(DATA_DIR, exist_ok=True)
+try:
+    os.chmod(DATA_DIR, 0o700)
+except OSError:
+    pass  # best-effort (e.g. mounted volume with fixed perms)
 os.makedirs(ARTIFACTS_DIR, exist_ok=True)
 os.chmod(ARTIFACTS_DIR, 0o700)
 

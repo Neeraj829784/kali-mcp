@@ -8,13 +8,12 @@ FIX: Migrated from blocking sqlite3 → aiosqlite throughout.
 """
 import asyncio
 import json
-import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 import aiosqlite
 
-ENGAGEMENT_DB = os.path.join(os.path.dirname(__file__), "engagements.db")
+from config import ENGAGEMENT_DB_PATH as ENGAGEMENT_DB
 
 # Module-level active engagement (in-memory, reset on restart)
 _active: dict | None = None

@@ -9,7 +9,7 @@ import ipaddress
 import os
 import threading
 
-SCOPE_FILE = os.path.join(os.path.dirname(__file__), "scope.txt")
+from config import SCOPE_FILE
 
 _cache: list[str] | None = None
 _lock = threading.Lock()   # guards all _cache access

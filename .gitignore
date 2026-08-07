@@ -15,6 +15,12 @@ audit.log
 scope.txt
 gowitness.jsonl
 
+# Centralized data dir (KALI_MCP_DATA_DIR) — all runtime state lives here.
+# The per-file patterns above already match inside it, but ignore common
+# data-dir names outright as a safety net.
+data/
+kali-mcp-data/
+
 # Credential vault and engagement databases (plaintext secrets)
 vault.db
 jobs.db

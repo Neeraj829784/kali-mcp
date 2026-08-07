@@ -11,8 +11,7 @@ from datetime import datetime, timezone
 
 from cryptography.fernet import Fernet, InvalidToken
 
-VAULT_DB = os.path.join(os.path.dirname(__file__), "vault.db")
-KEY_FILE = os.path.join(os.path.dirname(__file__), "vault.key")
+from config import VAULT_DB_PATH as VAULT_DB, VAULT_KEY_FILE as KEY_FILE
 
 # Busy timeout (seconds) so concurrent writers wait instead of erroring out.
 _SQLITE_TIMEOUT = 30

@@ -1,6 +1,6 @@
 # Tool Reference
 
-kali-mcp exposes **108 AI-callable tools**. You never call these directly — your
+kali-mcp exposes **109 AI-callable tools**. You never call these directly — your
 AI client does, on your behalf. This page is the complete reference so you know
 what the AI *can* do and what each action returns.
 
@@ -96,6 +96,7 @@ Finding known weaknesses and mapping versions to exploits.
 | `searchsploit_get_path(edb_id)` | Get the exploit file path for an EDB-ID |
 | `cve_to_exploit(service, version, banner, os_type)` | Given a service version → matching searchsploit + Metasploit exploits |
 | `scan_and_exploit_chain(target, ports)` | Full chain: port scan → version detect → CVE lookup per service |
+| `verify_vulnerability(vuln_class, url, param)` | Actively **prove** a lead is real (CORS, open_redirect, git_exposure, env_exposure) — returns a confirmed verdict + proof pack. Turns "leads" into "proven bugs" |
 
 ---
 

@@ -50,13 +50,16 @@ def build_report(scope: str, assets: list[str], coverage: list[dict],
     }
 
 
-async def run_hunt(scope: str, recon_fn, verify_fn, errors: list[str] | None = None) -> dict:
+async def run_hunt(scope: str, recon_fn, verify_fn, extra_phase=None,
+                   errors: list[str] | None = None) -> dict:
     """Orchestrate a single-program hunt.
 
     recon_fn(scope) -> list[str] of live assets/URLs to test.
     verify_fn(asset) -> {"checks": [vuln_class,...], "verifications": [oracle result,...]}
-    Both are injected so this is fully testable offline and reuses the real
-    recon/verify tools at runtime. Never raises: per-asset errors are collected.
+    extra_phase(scope) -> ([coverage_item,...], [verification,...]) — optional extra
+        pass (e.g. parameter-injection oracles over harvested URLs).
+    All are injected so this is fully testable offline. Never raises: per-asset and
+    phase errors are collected into the report.
     """
     errs = list(errors or [])
     try:
@@ -73,6 +76,15 @@ async def run_hunt(scope: str, recon_fn, verify_fn, errors: list[str] | None = N
             verifications.extend(res.get("verifications", []))
         except Exception as e:
             errs.append(f"{asset}: {e}")
+
+    if extra_phase is not None:
+        try:
+            extra_cov, extra_ver = await extra_phase(scope)
+            coverage.extend(extra_cov or [])
+            verifications.extend(extra_ver or [])
+        except Exception as e:
+            errs.append(f"injection phase: {e}")
+
     return build_report(scope, assets, coverage, verifications, errs)
 
 

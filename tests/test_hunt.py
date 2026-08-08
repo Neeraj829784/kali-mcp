@@ -94,6 +94,24 @@ async def test_run_hunt_per_asset_error_collected():
     assert any("bad: boom" in e for e in rep["errors"])
 
 
+@pytest.mark.asyncio
+async def test_run_hunt_extra_phase():
+    async def recon(scope):
+        return ["https://a"]
+
+    async def verify(asset):
+        return {"checks": ["cors"], "verifications": []}
+
+    async def extra(scope):
+        return ([{"target": "https://a/p?x=1", "checks": ["lfi"]}],
+                [{"vuln_class": "lfi", "url": "https://a/p?x=1", "confirmed": True,
+                  "proof": "root:...:0:0:"}])
+
+    rep = await H.run_hunt("x", recon, verify, extra_phase=extra)
+    assert rep["summary"]["checks_run"] == 2          # cors + lfi
+    assert rep["summary"]["confirmed_findings"] == 1
+
+
 def test_render_report_markdown():
     rep = H.build_report(
         "*.example.com", ["https://a.example.com"],

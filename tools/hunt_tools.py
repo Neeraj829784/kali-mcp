@@ -2,6 +2,7 @@
 import os
 import re
 import tempfile
+from urllib.parse import urlsplit, parse_qsl
 
 import httpx
 
@@ -13,24 +14,28 @@ import hunt
 
 # Oracles that need NO injection point — safe to run on any base URL.
 _AUTO_CLASSES = ["cors", "git_exposure", "env_exposure"]
+# Oracles that inject a (non-destructive, read-only) payload into a query param.
+_INJECTION_CLASSES = ["open_redirect", "lfi", "reflected_xss", "ssti"]
 
 
 def _register(mcp, job_mgr):
 
     @mcp.tool()
-    async def hunt_program(scope: str, max_assets: int = 20, format: str = "json") -> dict:
+    async def hunt_program(scope: str, max_assets: int = 20, format: str = "json",
+                           include_injection: bool = False) -> dict:
         """
-        Autonomous single-program hunt (SAFE, read-only). Discovers live hosts for
-        a domain (subfinder -> httpx), then runs the no-injection proof oracles
-        (CORS, exposed .git, exposed .env) on each, and returns a
-        confirmed-findings-with-proof report + a coverage ledger + a needs-human list.
+        Autonomous single-program hunt. Discovers live hosts for a domain
+        (subfinder -> httpx), then runs the no-injection proof oracles (CORS,
+        exposed .git, exposed .env) on each. Returns a confirmed-findings-with-proof
+        report + a coverage ledger + a needs-human list.
 
         scope: a domain (e.g. 'example.com') — must be in scope
-        max_assets: cap on live hosts to test (default 20)
+        max_assets: cap on hosts / parameterized URLs to test (default 20)
         format: 'json' (default) or 'markdown' (adds a rendered `report_markdown`)
-
-        This first pass runs ONLY safe read-only checks: it does not exploit,
-        submit, brute-force, or send parameter-injection payloads.
+        include_injection: also harvest parameterized URLs (gau) and run the
+            read-only injection oracles (open_redirect, LFI, reflected XSS, SSTI).
+            Default False. These send non-destructive GET payloads only — still no
+            exploitation, brute-force, state changes, or submission.
         """
         try:
             guard_token(scope, "scope")
@@ -85,7 +90,50 @@ def _register(mcp, job_mgr):
                                         "confirmed": None, "proof": f"error: {e}"})
             return {"checks": _AUTO_CLASSES, "verifications": results}
 
-        report = await hunt.run_hunt(scope, recon_fn, verify_fn)
+        async def injection_phase(domain: str):
+            # Harvest parameterized URLs passively (gau), then run read-only
+            # injection oracles on each (auto-injects into the first query param).
+            try:
+                g = await job_mgr.run_and_wait(
+                    "gau", ["gau", "--subs", domain], TOOL_TIMEOUTS["gau"], target=domain)
+                raw = [l.strip() for l in (g.get("stdout", "") or "").splitlines()
+                       if l.strip().startswith("http") and "?" in l and "=" in l]
+            except Exception:
+                raw = []
+            seen, cand = set(), []
+            for u in raw:
+                try:
+                    check_scope(u)
+                except Exception:
+                    continue
+                p = urlsplit(u)
+                key = (p.netloc, p.path, tuple(sorted(k for k, _ in parse_qsl(p.query))))
+                if key in seen:
+                    continue
+                seen.add(key)
+                cand.append(u)
+                if len(cand) >= max_assets:
+                    break
+            cov, ver = [], []
+            async with httpx.AsyncClient(
+                follow_redirects=False, timeout=10, verify=TLS_VERIFY,
+                headers={"User-Agent": "Mozilla/5.0"},
+            ) as client:
+                for u in cand:
+                    checks = []
+                    for vc in _INJECTION_CLASSES:
+                        try:
+                            ver.append(await oracles.ORACLES[vc](client, u))
+                            checks.append(vc)
+                        except Exception as e:
+                            ver.append({"vuln_class": vc, "url": u,
+                                        "confirmed": None, "proof": f"error: {e}"})
+                    cov.append({"target": u, "checks": checks})
+            return (cov, ver)
+
+        report = await hunt.run_hunt(
+            scope, recon_fn, verify_fn,
+            extra_phase=(injection_phase if include_injection else None))
         if format.lower() == "markdown":
             report["report_markdown"] = hunt.render_report_markdown(report)
         return report

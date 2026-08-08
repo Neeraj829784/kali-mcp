@@ -5,7 +5,7 @@
 ### Your AI, holding a full Kali Linux toolkit.
 
 **kali-mcp turns any MCP-compatible AI assistant into a hands-on penetration
-testing partner** — it drives 20+ real Kali security tools through 101
+testing partner** — it drives 27+ real Kali security tools through 108
 AI-callable actions, and hands the AI clean, verified, structured findings
 instead of raw terminal noise.
 
@@ -13,7 +13,7 @@ instead of raw terminal noise.
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-**101 MCP tools · 20+ Kali binaries · 21 finding extractors · 7 attack-chain templates · 25 CVE remediations · ~315 tests**
+**108 MCP tools · 27+ Kali binaries · 21 finding extractors · 7 attack-chain templates · 25 CVE remediations · ~370 tests**
 
 [Quick Start](#-quick-start) · [Documentation](docs/README.md) · [Tool Reference](docs/tools.md)
 

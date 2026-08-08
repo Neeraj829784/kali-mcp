@@ -1,6 +1,6 @@
 # Tool Reference
 
-kali-mcp exposes **101 AI-callable tools**. You never call these directly — your
+kali-mcp exposes **108 AI-callable tools**. You never call these directly — your
 AI client does, on your behalf. This page is the complete reference so you know
 what the AI *can* do and what each action returns.
 
@@ -55,6 +55,10 @@ Discovering what exists: hosts, domains, subdomains, DNS records, and OSINT.
 | `whois_lookup(target)` | WHOIS registration data for a domain or IP |
 | `dig_lookup(domain, record_type, dns_server, short)` | DNS record queries (A, MX, NS, TXT, ...) |
 | `dig_zone_transfer(domain, nameserver)` | DNS zone transfer attempt (AXFR) |
+| `dnsx_resolve(targets, record_type, show_response)` | Fast DNS resolution / record lookup (A/AAAA/CNAME/NS/TXT/PTR/MX) via dnsx |
+| `httpx_probe(targets, ports, follow_redirects, match_codes, tech_detect)` | Probe live HTTP services — status, title, server, tech, CDN/WAF, IP (httpx) |
+| `asnmap_lookup(query, query_type)` | Map an ASN / IP / domain / org → announced CIDR ranges |
+| `gau_urls(domain, include_subs, providers, match_codes, threads, from_date, to_date)` | Passive URL discovery from Wayback / CommonCrawl / OTX / URLScan archives |
 
 > **Injection-safe:** every nmap tool validates target tokens against an
 > allowlist regex, so inputs like `--script=evil` or `/etc/passwd` are rejected
@@ -130,6 +134,9 @@ Interacting with web applications directly, without a full scanner.
 | `web_crawl(url, max_depth, max_pages, include_external, timeout)` | Organic crawler — finds endpoints wordlists miss |
 | `screenshot_url(url, timeout)` | Single-URL screenshot via gowitness |
 | `screenshot_urls(urls, threads, timeout)` | Batch screenshots for visual triage |
+| `katana_crawl(url, depth, js_crawl, concurrency, rate_limit, headless, crawl_duration)` | Next-gen crawler incl. JavaScript endpoint parsing (katana) |
+| `arjun_params(url, method, threads, stable, headers, delay)` | Discover hidden HTTP parameters on an endpoint |
+| `linkfinder_extract(input_url, domain_mode, regex, cookies, timeout)` | Extract endpoints/links from JavaScript files (LinkFinder) |
 
 ---
 

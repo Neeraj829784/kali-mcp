@@ -18,6 +18,7 @@ import program_scope
 import asset_inventory
 import recon_sweep
 from tools import file_tools
+from tools import hunt_tools
 from tools.reconnaissance import nmap, whois_tool, dig_tool, subfinder, theharvester, amass
 from tools.reconnaissance import dnsx_tool, httpx_tool, asnmap_tool, gau_tool
 from tools.scanning import nikto, gobuster, enum4linux, smbclient_tool, ffuf
@@ -58,7 +59,7 @@ for module in [nmap, whois_tool, dig_tool, subfinder, theharvester, amass,
                sqlmap, hydra, metasploit, netcat, ssh_tools, race_tools,
                report_generator, pcap_parser, web_tools, web_crawler, screenshot,
                katana_tool, arjun_tool, linkfinder_tool,
-               health, file_tools,
+               health, file_tools, hunt_tools,
                cred_vault, findings_mod,
                engagement, workflow, triage, program_scope, asset_inventory, recon_sweep]:
     module._register(mcp, job_mgr)

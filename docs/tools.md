@@ -1,6 +1,6 @@
 # Tool Reference
 
-kali-mcp exposes **122 AI-callable tools**. You never call these directly — your
+kali-mcp exposes **123 AI-callable tools**. You never call these directly — your
 AI client does, on your behalf. This page is the complete reference so you know
 what the AI *can* do and what each action returns.
 
@@ -26,13 +26,13 @@ Tools are grouped by phase:
 ---
 
 ## Parallel Workflows
-
 One call that fires many tools at once. Full detail in [Workflows](workflows.md).
 
 | Tool | What it does |
 |---|---|
 | `scan_host(target, intensity)` | Full parallel host scan — port scan, then web/SMB/SSH tools in parallel based on what's found |
 | `scan_web(url, depth)` | Full parallel web scan — nikto + gobuster + nuclei + crawler + screenshots |
+| `hunt_program(scope, max_assets)` | **Autonomous single-program hunt** (safe/read-only): discovers live hosts, runs the no-injection proof oracles, and returns a confirmed-findings-with-proof report + coverage ledger + needs-human list |
 
 ---
 

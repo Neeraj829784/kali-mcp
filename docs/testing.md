@@ -1,6 +1,6 @@
 # Testing
 
-kali-mcp ships with a large test suite (~440 tests across 37 files). Most are
+kali-mcp ships with a large test suite (~450 tests across 38 files). Most are
 fast and offline; a subset that drives real tools against live targets is marked
 so it's skipped by default.
 

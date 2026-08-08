@@ -1,6 +1,6 @@
 # Tool Reference
 
-kali-mcp exposes **119 AI-callable tools**. You never call these directly — your
+kali-mcp exposes **122 AI-callable tools**. You never call these directly — your
 AI client does, on your behalf. This page is the complete reference so you know
 what the AI *can* do and what each action returns.
 
@@ -96,7 +96,7 @@ Finding known weaknesses and mapping versions to exploits.
 | `searchsploit_get_path(edb_id)` | Get the exploit file path for an EDB-ID |
 | `cve_to_exploit(service, version, banner, os_type)` | Given a service version → matching searchsploit + Metasploit exploits |
 | `scan_and_exploit_chain(target, ports)` | Full chain: port scan → version detect → CVE lookup per service |
-| `verify_vulnerability(vuln_class, url, param)` | Actively **prove** a lead is real (CORS, open_redirect, git_exposure, env_exposure) — returns a confirmed verdict + proof pack. Turns "leads" into "proven bugs" |
+| `verify_vulnerability(vuln_class, url, param)` | Actively **prove** a lead is real (cors, open_redirect, git_exposure, env_exposure, lfi, reflected_xss, ssti) — returns a confirmed verdict + proof pack. Turns "leads" into "proven bugs" |
 | `oob_start(payloads, server)` | Mint a unique interactsh canary domain for out-of-band testing of **blind** bugs (SSRF/XSS/RCE/SQLi/XXE) |
 | `oob_poll(session_id)` | Check for received callbacks — `confirmed: true` is undeniable proof the blind bug fired |
 | `oob_stop(session_id)` | Stop an OOB session and clean up its listener |
@@ -107,6 +107,9 @@ Finding known weaknesses and mapping versions to exploits.
 | `identity_remove(name)` | Remove a stored test identity |
 | `verify_access_control(url, owner_identity, test_identities, method, body, include_anonymous)` | **IDOR / broken-access-control** detector — replays the same request as owner vs other identities vs anonymous and flags when a non-owner gets the owner's resource |
 | `sweep_idor(urls, owner_identity, test_identities, max_urls, include_anonymous, allow_dangerous, delay_ms)` | **Automatic IDOR sweep** — harvests ID-bearing URLs from a crawl (katana/gau) and bulk-tests each for access-control leaks. Read-only & skips state-changing endpoints by default |
+| `race_test(url, count, method, body, identity)` | **Race-condition / double-spend** test — fires many identical requests at once; `likely_race: true` flags a candidate. State-changing — authorized targets only |
+| `scan_js_secrets(urls, max_urls)` | Fetch JavaScript/URLs and scan for **leaked secrets/API keys** (AWS/Google/GitHub/Slack/Stripe/JWT/private keys); matches redacted |
+| `scan_text_secrets(text)` | Scan a pasted blob of text for leaked secrets/API keys |
 
 ---
 

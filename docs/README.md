@@ -1,7 +1,7 @@
 # kali-mcp Documentation
 
 Welcome. This is the complete documentation for **kali-mcp** — an AI-powered
-penetration testing platform that turns 27+ Kali Linux security tools into 119
+penetration testing platform that turns 27+ Kali Linux security tools into 122
 structured, AI-callable actions.
 
 New here? Read the pages in order. Already set up? Jump to whatever you need.
@@ -27,7 +27,7 @@ New here? Read the pages in order. Already set up? Jump to whatever you need.
 
 ## Reference
 
-- [Tool Reference](tools.md) — all 119 tools, grouped by phase, with parameters
+- [Tool Reference](tools.md) — all 122 tools, grouped by phase, with parameters
 - [Security Model](security.md) — scope enforcement, input validation, the credential vault, secrets
 - [Deployment](deployment.md) — running as a service, the data directory
 - [Testing](testing.md) — running the test suite and what it covers
@@ -50,7 +50,7 @@ scope and decisions.
 - **Finding** — a single structured result (an open port, a vulnerability, a
   discovered path). Every finding has a `severity`, a `confidence`, and
   `evidence`.
-- **Tool** — an AI-callable action (e.g. `nmap_port_scan`). 119 are available.
+- **Tool** — an AI-callable action (e.g. `nmap_port_scan`). 122 are available.
 - **Engagement** — a named test session that groups scope, findings, and credentials.
 - **Program** — a named authorization boundary (in-scope / out-of-scope rules).
 - **Scan run** — one recon cycle, recorded so later runs can be diffed for changes.

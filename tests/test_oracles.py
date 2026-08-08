@@ -172,7 +172,93 @@ async def test_oracle_env_exposure_fake_dropped():
 
 
 def test_registry_has_all_classes():
-    assert set(O.ORACLES) == {"cors", "open_redirect", "git_exposure", "env_exposure"}
+    assert set(O.ORACLES) == {"cors", "open_redirect", "git_exposure", "env_exposure",
+                              "lfi", "reflected_xss", "ssti"}
+
+
+# ── Pure: LFI / reflected XSS / SSTI ─────────────────────────────────────────
+
+def test_classify_lfi_passwd_confirmed():
+    v, _ = O.classify_lfi("root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:")
+    assert v == "confirm"
+
+
+def test_classify_lfi_no_signature_dropped():
+    v, _ = O.classify_lfi("<html>Not found</html>")
+    assert v == "drop"
+
+
+def test_classify_reflected_xss_unescaped_confirmed():
+    v, _ = O.classify_reflected_xss("<html>kxAB<svg/onload=alert(1)></html>",
+                                    "kxAB<svg/onload=alert(1)>")
+    assert v == "confirm"
+
+
+def test_classify_reflected_xss_escaped_dropped():
+    v, _ = O.classify_reflected_xss("<html>kxAB&lt;svg/onload=alert(1)&gt;</html>",
+                                    "kxAB<svg/onload=alert(1)>")
+    assert v == "drop"
+
+
+def test_classify_ssti_evaluated_confirmed():
+    v, _ = O.classify_ssti("result is 1787569 today", "{{1337*1337}}", "1787569")
+    assert v == "confirm"
+
+
+def test_classify_ssti_literal_dropped():
+    v, _ = O.classify_ssti("result is {{1337*1337}} today", "{{1337*1337}}", "1787569")
+    assert v == "drop"
+
+
+class _TextClient:
+    def __init__(self, body):
+        self._body = body
+
+    async def get(self, url, headers=None):
+        from types import SimpleNamespace
+        return SimpleNamespace(status_code=200, headers={}, text=self._body)
+
+
+class _EchoClient:
+    """Reflects the last query-param value into the body (optionally escaped)."""
+    def __init__(self, escape=False):
+        self.escape = escape
+
+    async def get(self, url, headers=None):
+        from urllib.parse import urlsplit, parse_qsl
+        from types import SimpleNamespace
+        vals = parse_qsl(urlsplit(url).query)
+        v = vals[-1][1] if vals else ""
+        if self.escape:
+            v = v.replace("<", "&lt;").replace(">", "&gt;")
+        return SimpleNamespace(status_code=200, headers={}, text=f"<html>{v}</html>")
+
+
+@pytest.mark.asyncio
+async def test_oracle_lfi_confirmed():
+    r = await O.oracle_lfi(_TextClient("root:x:0:0:root:/root:/bin/bash"),
+                           "https://x/read?file=a")
+    assert r["confirmed"] is True and r["vuln_class"] == "lfi"
+
+
+@pytest.mark.asyncio
+async def test_oracle_lfi_no_param():
+    r = await O.oracle_lfi(_TextClient("x"), "https://x/read")
+    assert r["confirmed"] is None
+
+
+@pytest.mark.asyncio
+async def test_oracle_reflected_xss_confirmed_and_escaped():
+    conf = await O.oracle_reflected_xss(_EchoClient(escape=False), "https://x/s?q=a")
+    assert conf["confirmed"] is True
+    safe = await O.oracle_reflected_xss(_EchoClient(escape=True), "https://x/s?q=a")
+    assert safe["confirmed"] is False
+
+
+@pytest.mark.asyncio
+async def test_oracle_ssti_confirmed():
+    r = await O.oracle_ssti(_TextClient("<html>1787569</html>"), "https://x/p?name=a")
+    assert r["confirmed"] is True
 
 
 # ── Blind SSRF one-shot oracle (fake OOB manager + recording client) ─────────

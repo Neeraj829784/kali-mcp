@@ -11,6 +11,7 @@ request through an injected client, so tests can drive it with a fake client and
 never touch the network).
 """
 import asyncio
+import re
 import secrets
 from urllib.parse import urlparse, urlencode, parse_qsl, urlsplit, urlunsplit, urljoin
 
@@ -133,12 +134,101 @@ async def oracle_env_exposure(client, url: str, param: str = "") -> dict:
     }
 
 
+# ── Injection oracles (LFI / reflected XSS / SSTI) ───────────────────────────
+
+def _first_query_param(url: str) -> str:
+    q = parse_qsl(urlsplit(url).query)
+    return q[0][0] if q else ""
+
+
+_PASSWD_RE = re.compile(r"root:.*?:0:0:")
+
+
+def classify_lfi(body: str) -> tuple[str, str]:
+    """Confirm local file inclusion / path traversal by file-read signatures."""
+    b = body or ""
+    if _PASSWD_RE.search(b):
+        return "confirm", "response contains /etc/passwd content (root:...:0:0:)"
+    low = b.lower()
+    if "[extensions]" in low or "for 16-bit app support" in low:
+        return "confirm", "response contains Windows win.ini content"
+    return "drop", "no file-read signature in the response"
+
+
+def classify_reflected_xss(body: str, marker: str) -> tuple[str, str]:
+    """Confirm the injected marker is reflected UNESCAPED (likely XSS).
+
+    Note: this proves unescaped reflection in an HTML context — a very strong
+    XSS signal — not guaranteed script execution (that needs a headless browser).
+    """
+    b = body or ""
+    if marker in b:
+        return "confirm", f"marker reflected unescaped ({marker!r}) — HTML-context injection, likely XSS"
+    encoded = marker.replace("<", "&lt;").replace(">", "&gt;")
+    if encoded in b:
+        return "drop", "marker reflected but HTML-encoded (output is escaped)"
+    return "drop", "marker not reflected"
+
+
+def classify_ssti(body: str, sent: str, expected: str) -> tuple[str, str]:
+    """Confirm server-side template injection: the expression was evaluated."""
+    b = body or ""
+    if expected in b and sent not in b:
+        return "confirm", f"template expression evaluated ({sent} -> {expected})"
+    return "drop", "expression rendered literally or not present (not evaluated)"
+
+
+async def oracle_lfi(client, url: str, param: str = "") -> dict:
+    p = param or _first_query_param(url)
+    if not p:
+        return {"vuln_class": "lfi", "url": url, "confirmed": None,
+                "proof": "no parameter to inject into — specify `param`"}
+    test_url = swap_param(url, p, "../../../../../../../../etc/passwd")
+    resp = await client.get(test_url)
+    verdict, proof = classify_lfi(getattr(resp, "text", ""))
+    return {"vuln_class": "lfi", "url": test_url, "confirmed": verdict == "confirm",
+            "proof": proof, "request": {"method": "GET", "url": test_url},
+            "response": {"status": resp.status_code}}
+
+
+async def oracle_reflected_xss(client, url: str, param: str = "") -> dict:
+    p = param or _first_query_param(url)
+    if not p:
+        return {"vuln_class": "reflected_xss", "url": url, "confirmed": None,
+                "proof": "no parameter to inject into — specify `param`"}
+    marker = f"kx{secrets.token_hex(4)}<svg/onload=alert(1)>"
+    test_url = swap_param(url, p, marker)
+    resp = await client.get(test_url)
+    verdict, proof = classify_reflected_xss(getattr(resp, "text", ""), marker)
+    return {"vuln_class": "reflected_xss", "url": test_url, "confirmed": verdict == "confirm",
+            "proof": proof, "request": {"method": "GET", "url": test_url},
+            "response": {"status": resp.status_code}}
+
+
+async def oracle_ssti(client, url: str, param: str = "") -> dict:
+    p = param or _first_query_param(url)
+    if not p:
+        return {"vuln_class": "ssti", "url": url, "confirmed": None,
+                "proof": "no parameter to inject into — specify `param`"}
+    # Uncommon product so a coincidental match is very unlikely.
+    sent, expected = "{{1337*1337}}", "1787569"
+    test_url = swap_param(url, p, sent)
+    resp = await client.get(test_url)
+    verdict, proof = classify_ssti(getattr(resp, "text", ""), sent, expected)
+    return {"vuln_class": "ssti", "url": test_url, "confirmed": verdict == "confirm",
+            "proof": proof, "request": {"method": "GET", "url": test_url},
+            "response": {"status": resp.status_code}}
+
+
 # Registry: vuln class -> active oracle. Extend this to add more proof-checks.
 ORACLES = {
     "cors": oracle_cors,
     "open_redirect": oracle_open_redirect,
     "git_exposure": oracle_git_exposure,
     "env_exposure": oracle_env_exposure,
+    "lfi": oracle_lfi,
+    "reflected_xss": oracle_reflected_xss,
+    "ssti": oracle_ssti,
 }
 
 

@@ -109,3 +109,54 @@ async def test_run_access_control_properly_enforced():
         {"Cookie": "s=owner"}, [("userB", {"Cookie": "s=bob"})])
     assert out["vulnerable"] is False
     assert out["results"][0]["verdict"] == "enforced"
+
+
+# ── IDOR candidate harvesting (pure) ─────────────────────────────────────────
+
+def test_find_candidates_query_id():
+    urls = ["https://x/invoice?id=1", "https://x/about", "https://x/search?q=hello"]
+    got = A.find_idor_candidates(urls)
+    assert got == ["https://x/invoice?id=1"]  # only the id-bearing one
+
+
+def test_find_candidates_numeric_and_uuid_path():
+    urls = ["https://x/orders/456",
+            "https://x/doc/550e8400-e29b-41d4-a716-446655440000",
+            "https://x/home"]
+    got = A.find_idor_candidates(urls)
+    assert len(got) == 2
+
+
+def test_find_candidates_dedupes_by_endpoint():
+    urls = ["https://x/invoice?id=1", "https://x/invoice?id=2", "https://x/invoice?id=3"]
+    assert A.find_idor_candidates(urls) == ["https://x/invoice?id=1"]  # one per endpoint
+
+
+def test_find_candidates_skips_dangerous_by_default():
+    urls = ["https://x/account/delete?id=1", "https://x/invoice?id=1"]
+    got = A.find_idor_candidates(urls)
+    assert got == ["https://x/invoice?id=1"]
+    # but included when explicitly allowed
+    assert len(A.find_idor_candidates(urls, allow_dangerous=True)) == 2
+
+
+def test_is_state_changing():
+    assert A.is_state_changing("https://x/user/transfer?to=2")
+    assert not A.is_state_changing("https://x/user/profile?id=2")
+
+
+@pytest.mark.asyncio
+async def test_run_idor_sweep_finds_leaks():
+    urls = [
+        "https://app/invoice?id=1", "https://app/invoice?id=2",  # dedupe -> 1 endpoint
+        "https://app/orders/99",                                  # candidate
+        "https://app/about",                                      # not a candidate
+        "https://app/account/delete?id=1",                        # dangerous -> skipped
+    ]
+    owner = {"Cookie": "s=owner"}
+    tests = [("userB", {"Cookie": "s=bob"}), ("anonymous", {})]
+    out = await A.run_idor_sweep(_FakeClient(), urls, owner, tests, delay=0)
+    assert out["candidates_found"] == 2          # invoice endpoint + orders (delete skipped, about ignored)
+    assert out["tested"] == 2
+    assert out["vulnerable_count"] == 2          # userB got owner's resource on both
+    assert all("userB" in v["leaked_to"] for v in out["vulnerable"])

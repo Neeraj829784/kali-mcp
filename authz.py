@@ -10,7 +10,11 @@ owner, as other identities, and as anonymous, then compares the responses:
 
 Pure decision logic (classify_authz) is separated from network I/O
 (run_access_control_test takes an injected client) so it is unit-testable offline.
+It also harvests ID-bearing URLs from a crawl and bulk-tests them (run_idor_sweep).
 """
+import asyncio
+import re
+from urllib.parse import urlsplit, parse_qsl
 
 _REDIRECTS = {301, 302, 303, 307, 308}
 
@@ -116,4 +120,91 @@ async def run_access_control_test(client, method: str, url: str, owner_headers: 
         "owner_length": baseline["length"],
         "results": results,
         "vulnerable": any(r["verdict"] == "vulnerable" for r in results),
+    }
+
+
+# ── Automatic IDOR sweep: harvest ID-bearing URLs, then bulk-test ────────────
+
+# Query-param names that typically reference a specific object.
+_ID_PARAM_RE = re.compile(
+    r"^(id|uid|u|user|userid|user_id|account|acct|customer|invoice|order|order_id|"
+    r"doc|document|file|fileid|file_id|num|no|number|pid|gid|oid|obj|object|ref|"
+    r"key|profile|msg|message|ticket|item|record|report)$", re.I)
+_NUMERIC_SEG = re.compile(r"^\d+$")
+_UUID_SEG = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+# Paths that likely change state — skipped unless explicitly allowed (GET on these
+# can still trigger actions in badly-built apps).
+_DANGER_RE = re.compile(
+    r"(delete|remove|destroy|drop|pay|payment|transfer|withdraw|logout|update|edit|"
+    r"create|/new\b|/add\b|reset|disable|enable|revoke|grant|approve|cancel)", re.I)
+
+
+def is_state_changing(url: str) -> bool:
+    """True if the URL looks like it performs a state-changing action."""
+    return bool(_DANGER_RE.search(url or ""))
+
+
+def _endpoint_template(parts) -> tuple:
+    """Normalize a URL to an endpoint template so we test each distinct endpoint
+    once (e.g. /invoice?id=1 and /invoice?id=2 collapse to one)."""
+    segs = []
+    for seg in parts.path.split("/"):
+        segs.append("{id}" if (_NUMERIC_SEG.match(seg) or _UUID_SEG.match(seg)) else seg)
+    pkeys = ",".join(sorted(k for k, _ in parse_qsl(parts.query)))
+    return (parts.netloc, "/".join(segs), pkeys)
+
+
+def find_idor_candidates(urls, allow_dangerous: bool = False) -> list[str]:
+    """From a list of URLs, return those that reference a specific object (an
+    id-like query param, or a numeric/uuid path segment), deduped per endpoint.
+    State-changing endpoints are skipped unless allow_dangerous is True.
+    """
+    seen: set = set()
+    out: list[str] = []
+    for u in urls:
+        u = (u or "").strip()
+        if not u.lower().startswith("http"):
+            continue
+        parts = urlsplit(u)
+        has_id = any(v and _ID_PARAM_RE.match(k) for k, v in
+                     parse_qsl(parts.query, keep_blank_values=True))
+        if not has_id:
+            has_id = any(_NUMERIC_SEG.match(s) or _UUID_SEG.match(s)
+                         for s in parts.path.split("/"))
+        if not has_id:
+            continue
+        if not allow_dangerous and is_state_changing(u):
+            continue
+        key = _endpoint_template(parts)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(u)
+    return out
+
+
+async def run_idor_sweep(client, urls, owner_headers, test_identities, max_urls: int = 50,
+                         length_tolerance: int = 64, allow_dangerous: bool = False,
+                         delay: float = 0.0, sleeper=None) -> dict:
+    """Harvest ID-bearing URLs and bulk-test each (read-only GET) for IDOR/BAC."""
+    sleeper = sleeper or asyncio.sleep
+    candidates = find_idor_candidates(urls, allow_dangerous)[:max_urls]
+    results: list[dict] = []
+    for url in candidates:
+        r = await run_access_control_test(client, "GET", url, owner_headers,
+                                          test_identities, length_tolerance=length_tolerance)
+        results.append(r)
+        if delay:
+            await sleeper(delay)
+    vulnerable = [r for r in results if r["vulnerable"]]
+    return {
+        "candidates_found": len(candidates),
+        "tested": len(results),
+        "vulnerable_count": len(vulnerable),
+        "vulnerable": [
+            {"url": r["url"],
+             "leaked_to": [x["identity"] for x in r["results"] if x["verdict"] == "vulnerable"]}
+            for r in vulnerable
+        ],
+        "results": results,
     }

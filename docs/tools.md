@@ -1,6 +1,6 @@
 # Tool Reference
 
-kali-mcp exposes **118 AI-callable tools**. You never call these directly — your
+kali-mcp exposes **119 AI-callable tools**. You never call these directly — your
 AI client does, on your behalf. This page is the complete reference so you know
 what the AI *can* do and what each action returns.
 
@@ -106,6 +106,7 @@ Finding known weaknesses and mapping versions to exploits.
 | `identity_list()` | List stored test identities (header keys only — never secret values) |
 | `identity_remove(name)` | Remove a stored test identity |
 | `verify_access_control(url, owner_identity, test_identities, method, body, include_anonymous)` | **IDOR / broken-access-control** detector — replays the same request as owner vs other identities vs anonymous and flags when a non-owner gets the owner's resource |
+| `sweep_idor(urls, owner_identity, test_identities, max_urls, include_anonymous, allow_dangerous, delay_ms)` | **Automatic IDOR sweep** — harvests ID-bearing URLs from a crawl (katana/gau) and bulk-tests each for access-control leaks. Read-only & skips state-changing endpoints by default |
 
 ---
 

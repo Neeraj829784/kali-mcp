@@ -23,7 +23,7 @@ from tools.reconnaissance import dnsx_tool, httpx_tool, asnmap_tool, gau_tool
 from tools.scanning import nikto, gobuster, enum4linux, smbclient_tool, ffuf
 from tools.scanning import fast_port_scan
 from tools.vulnerability import searchsploit, nuclei, wpscan
-from tools.vulnerability import cve_to_exploit, oracle_verify
+from tools.vulnerability import cve_to_exploit, oracle_verify, oob_verify
 from tools.exploitation import sqlmap, hydra, metasploit, netcat, ssh_tools
 from tools.reporting import report_generator, pcap_parser
 from tools.web import web_tools, web_crawler, screenshot
@@ -54,7 +54,7 @@ mcp = FastMCP("kali-mcp", lifespan=lifespan)
 for module in [nmap, whois_tool, dig_tool, subfinder, theharvester, amass,
                dnsx_tool, httpx_tool, asnmap_tool, gau_tool,
                nikto, gobuster, enum4linux, smbclient_tool, ffuf, fast_port_scan,
-               searchsploit, nuclei, wpscan, cve_to_exploit, oracle_verify,
+               searchsploit, nuclei, wpscan, cve_to_exploit, oracle_verify, oob_verify,
                sqlmap, hydra, metasploit, netcat, ssh_tools,
                report_generator, pcap_parser, web_tools, web_crawler, screenshot,
                katana_tool, arjun_tool, linkfinder_tool,

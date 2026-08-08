@@ -32,7 +32,7 @@ One call that fires many tools at once. Full detail in [Workflows](workflows.md)
 |---|---|
 | `scan_host(target, intensity)` | Full parallel host scan — port scan, then web/SMB/SSH tools in parallel based on what's found |
 | `scan_web(url, depth)` | Full parallel web scan — nikto + gobuster + nuclei + crawler + screenshots |
-| `hunt_program(scope, max_assets)` | **Autonomous single-program hunt** (safe/read-only): discovers live hosts, runs the no-injection proof oracles, and returns a confirmed-findings-with-proof report + coverage ledger + needs-human list |
+| `hunt_program(scope, max_assets, format, include_injection)` | **Autonomous single-program hunt**: discovers live hosts, runs the no-injection proof oracles (CORS/.git/.env), optionally (`include_injection`) harvests parameterized URLs and runs read-only injection oracles (open_redirect/LFI/XSS/SSTI). Returns a confirmed-findings-with-proof report (+`format='markdown'`) + coverage ledger + needs-human list |
 
 ---
 

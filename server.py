@@ -19,6 +19,7 @@ import asset_inventory
 import recon_sweep
 from tools import file_tools
 from tools.reconnaissance import nmap, whois_tool, dig_tool, subfinder, theharvester, amass
+from tools.reconnaissance import dnsx_tool, httpx_tool, asnmap_tool, gau_tool
 from tools.scanning import nikto, gobuster, enum4linux, smbclient_tool, ffuf
 from tools.scanning import fast_port_scan
 from tools.vulnerability import searchsploit, nuclei, wpscan
@@ -26,6 +27,7 @@ from tools.vulnerability import cve_to_exploit
 from tools.exploitation import sqlmap, hydra, metasploit, netcat, ssh_tools
 from tools.reporting import report_generator, pcap_parser
 from tools.web import web_tools, web_crawler, screenshot
+from tools.web import katana_tool, arjun_tool, linkfinder_tool
 
 # Audit logger — every tool call gets a line in audit.log
 audit = logging.getLogger("audit")
@@ -50,10 +52,12 @@ mcp = FastMCP("kali-mcp", lifespan=lifespan)
 
 # Register all tool modules
 for module in [nmap, whois_tool, dig_tool, subfinder, theharvester, amass,
+               dnsx_tool, httpx_tool, asnmap_tool, gau_tool,
                nikto, gobuster, enum4linux, smbclient_tool, ffuf, fast_port_scan,
                searchsploit, nuclei, wpscan, cve_to_exploit,
                sqlmap, hydra, metasploit, netcat, ssh_tools,
                report_generator, pcap_parser, web_tools, web_crawler, screenshot,
+               katana_tool, arjun_tool, linkfinder_tool,
                health, file_tools,
                cred_vault, findings_mod,
                engagement, workflow, triage, program_scope, asset_inventory, recon_sweep]:

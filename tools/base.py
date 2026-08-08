@@ -32,6 +32,14 @@ _INSTALL_HINTS = {
     "sshpass": "apt install sshpass (or use key_file parameter instead)",
     "tshark": "apt install tshark",
     "ssh": "apt install openssh-client",
+    # Recon/discovery additions
+    "dnsx": "go install github.com/projectdiscovery/dnsx/cmd/dnsx@latest (ensure ~/go/bin on PATH)",
+    "httpx-toolkit": "PD httpx. On Kali: apt install httpx-toolkit (the plain 'httpx' is the Python lib)",
+    "asnmap": "go install github.com/projectdiscovery/asnmap/cmd/asnmap@latest (ensure ~/go/bin on PATH)",
+    "katana": "go install github.com/projectdiscovery/katana/cmd/katana@latest (ensure ~/go/bin on PATH)",
+    "gau": "go install github.com/lc/gau/v2/cmd/gau@latest (ensure ~/go/bin on PATH)",
+    "arjun": "apt install arjun (or pipx install arjun)",
+    "interactsh-client": "go install github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest",
 }
 
 # Per-tool rate limiting state: tool_name → monotonic timestamp of last launch

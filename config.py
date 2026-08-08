@@ -90,6 +90,14 @@ TOOL_TIMEOUTS = {
     "sqlmap": 2400,  # 40 min
     "hydra": 1800,
     "msf_run_module": 600,
+    # Recon/discovery additions
+    "dnsx": 300,
+    "httpx": 300,
+    "asnmap": 120,
+    "katana": 600,
+    "gau": 300,
+    "arjun": 600,
+    "linkfinder": 180,
     "default": 120,
 }
 

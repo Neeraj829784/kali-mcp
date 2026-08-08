@@ -18,7 +18,7 @@ _AUTO_CLASSES = ["cors", "git_exposure", "env_exposure"]
 def _register(mcp, job_mgr):
 
     @mcp.tool()
-    async def hunt_program(scope: str, max_assets: int = 20) -> dict:
+    async def hunt_program(scope: str, max_assets: int = 20, format: str = "json") -> dict:
         """
         Autonomous single-program hunt (SAFE, read-only). Discovers live hosts for
         a domain (subfinder -> httpx), then runs the no-injection proof oracles
@@ -27,6 +27,7 @@ def _register(mcp, job_mgr):
 
         scope: a domain (e.g. 'example.com') — must be in scope
         max_assets: cap on live hosts to test (default 20)
+        format: 'json' (default) or 'markdown' (adds a rendered `report_markdown`)
 
         This first pass runs ONLY safe read-only checks: it does not exploit,
         submit, brute-force, or send parameter-injection payloads.
@@ -84,4 +85,7 @@ def _register(mcp, job_mgr):
                                         "confirmed": None, "proof": f"error: {e}"})
             return {"checks": _AUTO_CLASSES, "verifications": results}
 
-        return await hunt.run_hunt(scope, recon_fn, verify_fn)
+        report = await hunt.run_hunt(scope, recon_fn, verify_fn)
+        if format.lower() == "markdown":
+            report["report_markdown"] = hunt.render_report_markdown(report)
+        return report

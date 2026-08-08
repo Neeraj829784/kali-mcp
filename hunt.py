@@ -74,3 +74,40 @@ async def run_hunt(scope: str, recon_fn, verify_fn, errors: list[str] | None = N
         except Exception as e:
             errs.append(f"{asset}: {e}")
     return build_report(scope, assets, coverage, verifications, errs)
+
+
+def render_report_markdown(report: dict) -> str:
+    """Render a hunt report dict as a readable Markdown document."""
+    s = report.get("summary", {})
+    out = [
+        f"# Hunt Report — {report.get('scope', '')}",
+        "",
+        f"- Assets discovered: **{s.get('assets_discovered', 0)}**",
+        f"- Checks run: **{s.get('checks_run', 0)}**",
+        f"- Confirmed findings: **{s.get('confirmed_findings', 0)}**",
+        f"- Needs human review: **{s.get('needs_human_review', 0)}**",
+        "",
+        "## Confirmed findings (proven)",
+    ]
+    conf = report.get("confirmed_findings", [])
+    if not conf:
+        out.append("_None proven in this run._")
+    for f in conf:
+        out.append(f"### {f.get('vuln_class', '?')} — {f.get('url', '')}")
+        out.append(f"- **Proof:** {f.get('proof', '')}")
+        req = f.get("request")
+        if req:
+            out.append(f"- **Request:** `{req.get('method', '')} {req.get('url', '')}`")
+        if f.get("response"):
+            out.append(f"- **Response:** `{f.get('response')}`")
+        out.append("")
+    out.append("## Needs human review (unproven leads)")
+    nh = report.get("needs_human_review", [])
+    if not nh:
+        out.append("_None._")
+    for f in nh:
+        out.append(f"- {f.get('vuln_class', '?')} @ {f.get('url', '')} — {f.get('proof', '')}")
+    errs = report.get("errors", [])
+    if errs:
+        out += ["", "## Errors"] + [f"- {e}" for e in errs]
+    return "\n".join(out)

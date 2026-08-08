@@ -92,3 +92,20 @@ async def test_run_hunt_per_asset_error_collected():
     rep = await H.run_hunt("x", recon, verify)
     assert rep["summary"]["assets_discovered"] == 2
     assert any("bad: boom" in e for e in rep["errors"])
+
+
+def test_render_report_markdown():
+    rep = H.build_report(
+        "*.example.com", ["https://a.example.com"],
+        [{"target": "https://a.example.com", "checks": ["lfi"]}],
+        [{"vuln_class": "lfi", "url": "https://a.example.com/read", "confirmed": True,
+          "proof": "root:...:0:0:", "request": {"method": "GET", "url": "https://a.example.com/read?x=/etc/passwd"}},
+         {"vuln_class": "cors", "url": "https://a.example.com", "confirmed": False, "proof": "no ACAO"}],
+        errors=["dns timeout"])
+    md = H.render_report_markdown(rep)
+    assert "# Hunt Report — *.example.com" in md
+    assert "Confirmed findings: **1**" in md
+    assert "### lfi — https://a.example.com/read" in md
+    assert "root:...:0:0:" in md
+    assert "Needs human review" in md and "cors @" in md
+    assert "## Errors" in md and "dns timeout" in md

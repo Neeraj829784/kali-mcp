@@ -10,6 +10,7 @@ unit-testable) is separated from the ACTIVE oracle (which performs the HTTP
 request through an injected client, so tests can drive it with a fake client and
 never touch the network).
 """
+import asyncio
 import secrets
 from urllib.parse import urlparse, urlencode, parse_qsl, urlsplit, urlunsplit, urljoin
 
@@ -139,3 +140,54 @@ ORACLES = {
     "git_exposure": oracle_git_exposure,
     "env_exposure": oracle_env_exposure,
 }
+
+
+# ── Out-of-band oracle (blind SSRF) ──────────────────────────────────────────
+
+async def verify_blind_ssrf(oob_manager, client, url: str, param: str = "url",
+                            wait: float = 9.0, sleeper=None) -> dict:
+    """One-shot blind-SSRF proof: mint a canary, request `url` with the canary
+    injected into `param`, wait, then report whether the target's server called
+    back. `oob_manager`, `client`, and `sleeper` are injected so this is testable
+    without the interactsh binary or a real network.
+    """
+    sleeper = sleeper or asyncio.sleep
+    started = await oob_manager.start(count=1)
+    if "error" in started or not started.get("domain"):
+        return {"vuln_class": "blind_ssrf", "url": url, "confirmed": None,
+                "error": started.get("error", "could not start OOB session")}
+    sid, domain = started["session_id"], started["domain"]
+    marker = secrets.token_hex(4)
+    canary = f"http://{domain}/{marker}"
+    injected = swap_param(url, param or "url", canary)
+
+    trigger_ok, trigger_err = True, ""
+    try:
+        await client.get(injected)
+    except Exception as e:  # target unreachable / errored — still poll, may have fired
+        trigger_ok, trigger_err = False, str(e)
+
+    await sleeper(wait)
+    polled = await oob_manager.poll(sid)
+    await oob_manager.stop(sid)
+
+    inter = polled.get("interactions", [])
+    confirmed = bool(inter)
+    return {
+        "vuln_class": "blind_ssrf",
+        "url": url,
+        "injected_url": injected,
+        "canary": canary,
+        "confirmed": confirmed,
+        "proof": (
+            f"target server contacted the canary {domain} — "
+            f"{polled.get('interaction_count', 0)} interaction(s) {polled.get('protocols')}"
+            if confirmed else
+            "no callback received — not proven (target may filter egress, or the "
+            "canary needs a different injection point/parameter)"
+        ),
+        "interactions": inter[:20],
+        "request": {"method": "GET", "url": injected},
+        "trigger_ok": trigger_ok,
+        "trigger_error": trigger_err,
+    }

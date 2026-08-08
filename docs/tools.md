@@ -1,6 +1,6 @@
 # Tool Reference
 
-kali-mcp exposes **113 AI-callable tools**. You never call these directly — your
+kali-mcp exposes **114 AI-callable tools**. You never call these directly — your
 AI client does, on your behalf. This page is the complete reference so you know
 what the AI *can* do and what each action returns.
 
@@ -101,6 +101,7 @@ Finding known weaknesses and mapping versions to exploits.
 | `oob_poll(session_id)` | Check for received callbacks — `confirmed: true` is undeniable proof the blind bug fired |
 | `oob_stop(session_id)` | Stop an OOB session and clean up its listener |
 | `oob_list()` | List active OOB interaction sessions |
+| `verify_blind_ssrf(url, param, wait_seconds)` | **One-shot** blind SSRF proof: injects a canary into `param`, requests `url`, and confirms if the target's server calls back |
 
 ---
 

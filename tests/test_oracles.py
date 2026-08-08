@@ -173,3 +173,69 @@ async def test_oracle_env_exposure_fake_dropped():
 
 def test_registry_has_all_classes():
     assert set(O.ORACLES) == {"cors", "open_redirect", "git_exposure", "env_exposure"}
+
+
+# ── Blind SSRF one-shot oracle (fake OOB manager + recording client) ─────────
+
+class _FakeOOB:
+    def __init__(self, interactions):
+        self._inter = interactions
+        self.started = self.stopped = False
+
+    async def start(self, count=1, **kw):
+        self.started = True
+        return {"session_id": "s1", "domain": "abc123.oast.live"}
+
+    async def poll(self, session_id, correlation=""):
+        return {"interactions": self._inter, "interaction_count": len(self._inter),
+                "protocols": ["http"] if self._inter else []}
+
+    async def stop(self, session_id):
+        self.stopped = True
+        return {"stopped": True}
+
+
+class _FakeErrOOB:
+    async def start(self, count=1, **kw):
+        return {"error": "no domain", "return_code": -1}
+
+
+class _RecordClient:
+    def __init__(self):
+        self.url = None
+
+    async def get(self, url, headers=None):
+        self.url = url
+        from types import SimpleNamespace
+        return SimpleNamespace(status_code=200, headers={}, text="")
+
+
+async def _nosleep(_):
+    return None
+
+
+@pytest.mark.asyncio
+async def test_verify_blind_ssrf_confirmed():
+    oob = _FakeOOB([{"protocol": "http", "unique_id": "abc123"}])
+    client = _RecordClient()
+    r = await O.verify_blind_ssrf(oob, client, "https://t/fetch?url=x", param="url",
+                                  wait=0, sleeper=_nosleep)
+    assert r["confirmed"] is True and r["vuln_class"] == "blind_ssrf"
+    # canary was injected into the 'url' param of the triggered request
+    assert "oast.live" in client.url and "url=" in client.url
+    assert oob.started and oob.stopped
+
+
+@pytest.mark.asyncio
+async def test_verify_blind_ssrf_not_confirmed():
+    oob = _FakeOOB([])
+    r = await O.verify_blind_ssrf(oob, _RecordClient(), "https://t/fetch?url=x",
+                                  wait=0, sleeper=_nosleep)
+    assert r["confirmed"] is False and "not proven" in r["proof"]
+
+
+@pytest.mark.asyncio
+async def test_verify_blind_ssrf_session_error():
+    r = await O.verify_blind_ssrf(_FakeErrOOB(), _RecordClient(), "https://t/x",
+                                  wait=0, sleeper=_nosleep)
+    assert r["confirmed"] is None and "error" in r

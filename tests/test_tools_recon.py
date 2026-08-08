@@ -3,6 +3,8 @@ import pytest
 from tests.conftest import call
 from scope import clear_scope
 
+pytestmark = pytest.mark.live  # runs real tools/network — excluded from the default (CI) run
+
 
 @pytest.fixture(autouse=True)
 def lab_mode():

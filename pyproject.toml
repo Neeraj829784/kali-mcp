@@ -28,10 +28,10 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 testpaths = ["tests"]
 timeout = 120
-addopts = "-m 'not slow'"
+addopts = "-m 'not slow and not live'"
 markers = [
     "slow: long-running tests (pytest -m slow)",
-    "live: requires a live target (pytest -m live)",
+    "live: requires real tools or network — a live target (pytest -m live)",
 ]
 
 [tool.setuptools.packages.find]

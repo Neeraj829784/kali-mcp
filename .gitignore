@@ -35,6 +35,9 @@ known_hosts
 # Local MCP/client config that may hold tokens
 claude_desktop_config.json
 
+# Local Kiro workspace config (absolute local paths — not for the public repo)
+.kiro/
+
 # OS noise
 .DS_Store
 *.swp
